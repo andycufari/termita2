@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# logs
+*.log
+npm-debug.log*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
+*.swp
+
+# local config / secrets (termita stores config in ~/.config/termita, but just in case)
+.env
+.env.*
+config.local.json
+
+# temp / scratch
+_*.mjs
+_*.jsx
+*.tmp
