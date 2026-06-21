@@ -1,5 +1,10 @@
 # 🐜 termita
 
+[![npm version](https://img.shields.io/npm/v/termita.svg)](https://www.npmjs.com/package/termita)
+[![npm downloads](https://img.shields.io/npm/dm/termita.svg)](https://www.npmjs.com/package/termita)
+[![node](https://img.shields.io/node/v/termita.svg)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/termita.svg)](./LICENSE)
+
 > **Terminal copilot.** A chat with an LLM that lives *inside your terminal* and
 > can operate the shell — one approved command at a time. Not an autonomous agent.
 > A copilot. You drive, it rides shotgun.
@@ -54,32 +59,24 @@ node --version   # should be v20 or higher
 
 ## Install
 
-### macOS / Linux
+### macOS / Linux (recommended)
 
 ```sh
-git clone https://github.com/andycufari/termita2.git
-cd termita2
-npm install
-npm run build
-npm link          # makes `termita` available globally
+npm install -g termita
 termita
 ```
 
-> If `termita` doesn't resolve after `npm link`, make sure your npm global bin is
-> on `$PATH` (`npm bin -g` shows the dir). Or just run `node dist/cli.js`.
+That's it. (If `termita` isn't found, make sure your npm global bin is on `$PATH` —
+`npm bin -g` shows the dir.)
 
 ### Windows
 
 termita's shell tool targets a POSIX shell (`sh`). On Windows, run it inside **WSL2**
 (Ubuntu) or **Git Bash**, where `sh` is available:
 
-```powershell
+```sh
 # In WSL2 / Git Bash:
-git clone https://github.com/andycufari/termita2.git
-cd termita2
-npm install
-npm run build
-npm link
+npm install -g termita
 termita
 ```
 
@@ -91,8 +88,18 @@ Install on the box, then just run it — termita is a TUI that works fine over S
 
 ```sh
 ssh you@your-vps
-git clone https://github.com/andycufari/termita2.git && cd termita2
-npm install && npm run build && npm link
+npm install -g termita
+termita
+```
+
+### From source
+
+```sh
+git clone https://github.com/andycufari/termita2.git
+cd termita2
+npm install
+npm run build
+npm link          # makes `termita` available globally
 termita
 ```
 
