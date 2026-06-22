@@ -1,7 +1,6 @@
 # 🐜 termita
 
 [![npm version](https://img.shields.io/npm/v/termita.svg)](https://www.npmjs.com/package/termita)
-[![npm downloads](https://img.shields.io/npm/dm/termita.svg)](https://www.npmjs.com/package/termita)
 [![node](https://img.shields.io/node/v/termita.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/termita.svg)](./LICENSE)
 
@@ -10,15 +9,15 @@
 > A copilot. You drive, it rides shotgun.
 
 ```
- termita 2.0  ▸ terminal copilot
+ termita  ▸ terminal copilot
 
- ◆ you   el puerto 8000 está ocupado, qué lo usa?
+ ◆ you   port 8000 is taken, what's using it?
 
- ◇ term  dale, fijémonos quién lo tiene:
+ ◇ term  let's see who's holding it:
 
    ╭ shell ─────────────────────────────╮
    │ $ ss -tlnp | grep :8000            │
-   │ mira qué proceso escucha en el 8000│
+   │ check which process listens on 8000│
    ╰────────────────────────────────────╯
    ▸ Run      run it once
      Edit     tweak the command
@@ -26,6 +25,9 @@
      No       decline
      · ↑↓ move · enter · or R/E/A/N · esc cancel
 ```
+
+> termita mirrors your language — talk to it in English or Spanish and it replies
+> in kind.
 
 termita proposes **one** shell step, explains *what it does and why*, and waits.
 You approve it. It runs, the **real output streams into the chat live**, the model
