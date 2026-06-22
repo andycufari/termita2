@@ -22,7 +22,10 @@ export function runShell(command, ctx = {}) {
       child = spawn('sh', ['-c', wrapped], {
         cwd,
         env: { ...process.env, TERM: process.env.TERM || 'xterm-256color' },
-        signal,
+        // detached -> child is its own process-group leader, so on Esc we can
+        // kill the WHOLE group (the command + anything it spawned: servers,
+        // watchers, `tail -f`, `npm run dev`, etc.), not just the `sh` parent.
+        detached: true,
         stdio: ['ignore', 'pipe', 'pipe', 'pipe'], // 0 in, 1 out, 2 err, 3 = pwd
       });
     } catch (err) {
@@ -48,11 +51,19 @@ export function runShell(command, ctx = {}) {
     child.stdout.on('data', onData);
     child.stderr.on('data', onData);
 
-    if (signal) {
-      signal.addEventListener('abort', () => {
-        killed = true;
+    const killTree = () => {
+      killed = true;
+      try {
+        // negative pid = the whole process group (works because detached:true)
+        process.kill(-child.pid, 'SIGKILL');
+      } catch {
         try { child.kill('SIGKILL'); } catch { /* already dead */ }
-      }, { once: true });
+      }
+    };
+
+    if (signal) {
+      if (signal.aborted) killTree();
+      else signal.addEventListener('abort', killTree, { once: true });
     }
 
     child.on('error', (err) => {

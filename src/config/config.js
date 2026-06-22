@@ -19,6 +19,7 @@ export const DEFAULT_CONFIG = {
     model: 'qwen3.6-27b',
     apiKey: 'lm-studio', // ignored by LM Studio; required by OpenAI/Anthropic
     maxTokens: 4096,
+    contextSize: 8192, // model context window, for the token gauge in the footer
     reasoning: false,
   },
   ui: { theme: 'neon' },

@@ -30,18 +30,26 @@ export default function App({ engine, config, provider, needsSetup }) {
   const [editing, setEditing] = useState(null); // { id, value } when Editing a command
   const [busy, setBusy] = useState(false);
   const [busyAt, setBusyAt] = useState(null);
+  const [queue, setQueue] = useState([]); // messages typed while busy, sent next turn
   const [showBanner, setShowBanner] = useState(true);
   const [autoApprove, setAutoApprove] = useState(config.policy.autoApprove);
   const [reasoning, setReasoning] = useState(config.llm.reasoning);
   const [model, setModel] = useState(config.llm.model);
   const [status, setStatus] = useState(null);
 
+  const [rewind, setRewind] = useState(null); // { points:[{idx,text}], sel } when in jump-back mode
+
   const inputHistory = useRef([]);
   const histIdx = useRef(-1);
   const ctrlC = useRef(0);
+  const lastEsc = useRef(0); // timestamp of last Esc, for double-Esc detection
   const outputBuffers = useRef({}); // id -> accumulated live output
+  const queueRef = useRef([]); // mirror of `queue` for the engine event closure
 
   const push = useCallback((item) => setItems((cur) => [...cur, { _k: uid(), ...item }]), []);
+
+  // keep queueRef in sync so the engine event closure can read the latest queue
+  useEffect(() => { queueRef.current = queue; }, [queue]);
 
   const patchItem = useCallback((id, patch) => {
     setItems((cur) => cur.map((it) => (it.toolId === id ? { ...it, ...patch } : it)));
@@ -103,10 +111,21 @@ export default function App({ engine, config, provider, needsSetup }) {
           });
           break;
         case EVENTS.TURN_DONE:
-          setBusy(false);
-          setBusyAt(null);
           setStream(null);
           setStatus(null);
+          // drain a queued message (typed while busy) -> send it as the next turn
+          if (queueRef.current.length > 0) {
+            const next = queueRef.current[0];
+            queueRef.current = queueRef.current.slice(1);
+            setQueue((q) => q.slice(1));
+            push({ kind: 'msg', who: 'you', text: next });
+            setBusyAt(Date.now());
+            // keep busy=true; send the next turn immediately
+            setTimeout(() => engine.send(next), 0);
+          } else {
+            setBusy(false);
+            setBusyAt(null);
+          }
           break;
         case EVENTS.ERROR:
           setStream(null);
@@ -137,6 +156,13 @@ export default function App({ engine, config, provider, needsSetup }) {
     inputHistory.current.unshift(text);
     histIdx.current = -1;
 
+    // While the model/turn is busy, queue plain messages — they auto-send in
+    // order when the current turn ends (so the model never loses them).
+    if (busy && !text.startsWith('/')) {
+      setQueue((q) => [...q, text]);
+      return;
+    }
+
     if (text.startsWith('/')) {
       await runSlash(text, {
         engine, config, provider,
@@ -157,7 +183,7 @@ export default function App({ engine, config, provider, needsSetup }) {
     setBusy(true);
     setBusyAt(Date.now());
     engine.send(text);
-  }, [engine, config, provider, push, exit]);
+  }, [engine, config, provider, push, exit, busy]);
 
   const doToggleAuto = useCallback(() => {
     setAutoApprove((cur) => {
@@ -197,6 +223,61 @@ export default function App({ engine, config, provider, needsSetup }) {
     }
   }, [config, push]);
 
+  // --- Escape: interrupt if busy, else double-Esc opens rewind ---------------
+  const handleEscape = useCallback(() => {
+    if (setupOpen) return;
+    if (rewind) { setRewind(null); return; } // esc out of rewind mode
+
+    // Single Esc while busy / streaming / a tool is running -> interrupt now.
+    if (busy || stream || pending) {
+      engine.interrupt();
+      setStatus(null);
+      setBusy(false);
+      setBusyAt(null);
+      lastEsc.current = 0;
+      return;
+    }
+
+    // Idle: detect double-Esc (two within 600ms) -> open jump-back picker.
+    const now = Date.now();
+    if (now - lastEsc.current < 600) {
+      lastEsc.current = 0;
+      const points = engine.history
+        .map((m, idx) => ({ idx, text: m.role === 'user' ? m.content : null }))
+        .filter((p) => p.text);
+      if (points.length === 0) { push({ kind: 'notice', text: 'nothing to jump back to', level: 'dim' }); return; }
+      setRewind({ points, sel: points.length - 1 });
+    } else {
+      lastEsc.current = now;
+      setStatus('esc again to jump back');
+      setTimeout(() => { setStatus((s) => (s === 'esc again to jump back' ? null : s)); }, 700);
+    }
+  }, [setupOpen, rewind, busy, stream, pending, engine, push]);
+
+  // Apply a rewind: truncate engine history + transcript to before the chosen msg.
+  const applyRewind = useCallback((point) => {
+    engine.rewindTo(point.idx);
+    // rebuild transcript from the surviving history (drop everything after)
+    setItems((cur) => {
+      // find the Nth user message in items and cut there
+      let userSeen = -1;
+      const cut = [];
+      const targetUserOrdinal = engine.history.filter((m) => m.role === 'user').length; // after rewind
+      for (const it of cur) {
+        if (it.kind === 'msg' && it.who === 'you') {
+          userSeen++;
+          if (userSeen >= targetUserOrdinal) break;
+        }
+        cut.push(it);
+      }
+      return cut;
+    });
+    setRewind(null);
+    setStream(null);
+    setInput(point.text);
+    push({ kind: 'notice', text: 'jumped back — edit & send, or type a new message', level: 'ok' });
+  }, [engine, push]);
+
   // --- Key handling: approval, edit, interrupt, tab, ctrl-c -----------------
   // Disabled while the setup wizard is open (it owns the keyboard).
   useInput((inputCh, key) => {
@@ -206,12 +287,18 @@ export default function App({ engine, config, provider, needsSetup }) {
       return;
     }
 
-    if (key.tab) { doToggleAuto(); return; }
-
-    if (key.escape) {
-      if (busy || pending) { engine.interrupt(); setStatus(null); }
+    // rewind (jump-back) picker owns the keyboard while open
+    if (rewind) {
+      if (key.escape) { setRewind(null); return; }
+      if (key.upArrow) { setRewind((r) => ({ ...r, sel: (r.sel - 1 + r.points.length) % r.points.length })); return; }
+      if (key.downArrow) { setRewind((r) => ({ ...r, sel: (r.sel + 1) % r.points.length })); return; }
+      if (key.return) { applyRewind(rewind.points[rewind.sel]); return; }
       return;
     }
+
+    if (key.tab) { doToggleAuto(); return; }
+
+    if (key.escape) { handleEscape(); return; }
 
     if (key.ctrl && inputCh === 'c') {
       ctrlC.current += 1;
@@ -268,6 +355,12 @@ export default function App({ engine, config, provider, needsSetup }) {
   const isSettled = (it) => it.kind !== 'tool' || it.status === 'done';
   const settled = items.filter(isSettled);
   const live = items.filter((it) => !isSettled(it));
+  // a tool is actively running (its OutputStream already shows a "running" spinner)
+  const toolRunning = live.some((it) => it.kind === 'tool' && it.status === 'running');
+
+  // rough token estimate of the session (chars/4) + configurable context size
+  const tokens = estimateTokens(engine.history);
+  const contextSize = config.llm.contextSize || 8192;
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -290,17 +383,28 @@ export default function App({ engine, config, provider, needsSetup }) {
       {/* approval bar for the pending tool */}
       {pending && <ApprovalMenu selected={selected} danger={!!pending.danger} />}
 
-      {/* onboarding wizard takes over the input region when open */}
-      {setupOpen ? (
+      {/* rewind picker (double-Esc): jump back to an earlier message */}
+      {rewind ? (
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} marginBottom={1}>
+          <Text color={theme.accent} bold>↩ jump back to…</Text>
+          {rewind.points.map((p, i) => (
+            <Text key={p.idx} color={i === rewind.sel ? theme.ok : theme.dim} bold={i === rewind.sel}>
+              {i === rewind.sel ? glyphs.bullet : ' '} {p.text.length > 64 ? p.text.slice(0, 64) + '…' : p.text}
+            </Text>
+          ))}
+          <Text color={theme.faint}>  ↑↓ select · enter rewind here · esc cancel</Text>
+        </Box>
+      ) : setupOpen ? (
+        /* onboarding wizard takes over the input region when open */
         <Setup initial={config.llm} onDone={onSetupDone} onCancel={onSetupCancel} />
       ) : (
         <>
-          {/* busy spinner when waiting on first token (shows it's alive) */}
-          {busy && !stream && !pending && !editing && (
-            <Box paddingLeft={2}>
-              <Spinner label={status || 'thinking…'} />
-              {busyAt ? <Text color={theme.faint}>  </Text> : null}
-              {busyAt ? <ElapsedInline since={busyAt} /> : null}
+          {/* queued messages (typed while busy) — sent in order when free */}
+          {queue.length > 0 && (
+            <Box flexDirection="column" paddingLeft={2}>
+              {queue.map((q, i) => (
+                <Text key={i} color={theme.faint}>⤷ queued: {q.length > 60 ? q.slice(0, 60) + '…' : q}</Text>
+              ))}
             </Box>
           )}
 
@@ -322,19 +426,35 @@ export default function App({ engine, config, provider, needsSetup }) {
                   history={inputHistory}
                   histIdx={histIdx}
                   setInput={setInput}
+                  onEscape={handleEscape}
                 />
               </>
             )}
           </Box>
 
-          {/* footer: live status (model/AUTO/reasoning) + contextual hint */}
+          {/* footer: live status line. left = activity (thinking timer / hint),
+              right = AUTO legend · tokens/context · model */}
           <Box paddingLeft={1} justifyContent="space-between">
-            <Text color={theme.faint}>
-              {pending ? '↑↓ + enter · or R/E/A/N · esc cancels' : busy ? 'esc to interrupt' : '/help · /setup · tab auto-approve'}
-            </Text>
+            <Box>
+              {busy && !toolRunning && !pending ? (
+                <>
+                  <Spinner label={status || 'thinking'} />
+                  <Text color={theme.faint}> </Text>
+                  {busyAt ? <ElapsedInline since={busyAt} /> : null}
+                  <Text color={theme.faint}> · esc to stop</Text>
+                </>
+              ) : (
+                <Text color={theme.faint}>
+                  {pending ? '↑↓ + enter · or R/E/A/N · esc cancels'
+                    : toolRunning ? 'running… esc to stop'
+                    : '/help · /setup · tab auto-approve · esc esc to jump back'}
+                </Text>
+              )}
+            </Box>
             <Text>
-              {autoApprove && <Text color={theme.warn} bold>AUTO {glyphs.bolt} </Text>}
+              {autoApprove && <Text color={theme.warn} bold>AUTO {glyphs.bolt} (tab off) </Text>}
               {reasoning && <Text color={theme.faint}>{glyphs.thought} think </Text>}
+              <Text color={theme.dim}>{fmtTokens(tokens)}/{fmtTokens(contextSize)} </Text>
               <Text color={theme.brandDim}>{model}</Text>
             </Text>
           </Box>
@@ -344,11 +464,19 @@ export default function App({ engine, config, provider, needsSetup }) {
   );
 }
 
-// Wraps TextInput to add ↑/↓ history. Ink's useInput in parent doesn't see keys
-// while TextInput is focused, so we intercept here via a controlled value.
-function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, setInput }) {
+// Wraps TextInput to add ↑/↓ history AND handle Esc. The <TextInput> is focused
+// while typing, so the PARENT useInput never sees keys here — Esc and history
+// must be handled in THIS component or they're swallowed by the text field.
+function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, setInput, onEscape }) {
   useInput((ch, key) => {
+    // Esc must work even while "disabled" (a command is running) — that's the
+    // whole point: interrupt the running command / streaming turn.
+    if (key.escape) { onEscape?.(); return; }
     if (disabled) return;
+    // Shift+Enter (or Alt+Enter) inserts a newline instead of submitting.
+    // Terminals that report the modifier get true multiline; others can also
+    // type a trailing "\" to continue on the next line (handled in onSubmit).
+    if (key.return && (key.shift || key.meta)) { onChange(value + '\n'); return; }
     if (key.upArrow) {
       const h = history.current;
       if (h.length === 0) return;
@@ -359,10 +487,31 @@ function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, se
       if (histIdx.current <= 0) { histIdx.current = -1; setInput(''); }
       else { histIdx.current -= 1; setInput(h[histIdx.current]); }
     }
-  }, { isActive: !disabled });
+  });
 
-  if (disabled) return <Text color={theme.faint}>{value || '(decide above ↑)'}</Text>;
-  return <TextInput value={value} onChange={onChange} onSubmit={onSubmit} placeholder="talk to termita…" />;
+  // Trailing backslash = line continuation (portable fallback for shift+enter).
+  const handleSubmit = (v) => {
+    if (v.endsWith('\\')) { onChange(v.slice(0, -1) + '\n'); return; }
+    onSubmit(v);
+  };
+
+  if (disabled) return <Text color={theme.faint}>{value || '(running… esc to stop)'}</Text>;
+  return <TextInput value={value} onChange={onChange} onSubmit={handleSubmit} placeholder="talk to termita…  (shift+enter or \ = newline)" />;
+}
+
+// Rough token estimate: ~4 chars/token across all message content.
+function estimateTokens(history) {
+  let chars = 0;
+  for (const m of history || []) {
+    if (typeof m.content === 'string') chars += m.content.length;
+    if (m.tool_calls) for (const tc of m.tool_calls) chars += (tc.function?.arguments || '').length;
+  }
+  return Math.ceil(chars / 4);
+}
+
+function fmtTokens(n) {
+  if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k';
+  return String(n);
 }
 
 // Small ticking elapsed timer for the busy/thinking indicator.

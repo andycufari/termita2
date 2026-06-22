@@ -11,8 +11,13 @@ import {
 } from '../tools/index.js';
 import { shellState } from '../tools/shell.js';
 import { createProvider } from '../providers/index.js';
+import { SessionLog } from './log.js';
 
-const MAX_TURNS = 16;
+// No hard cap on tool rounds — every mutating command needs approval and Esc
+// cancels anytime, so the human is the real limit. We only show a soft "still
+// going" nudge after this many consecutive rounds to catch a runaway loop.
+const SOFT_WARN_TURNS = 50;
+const HARD_LIMIT = 1000; // absolute backstop against an infinite bug-loop
 
 export class Engine {
   constructor({ provider, gate, system, systemPrompt }) {
@@ -21,6 +26,7 @@ export class Engine {
     this.system = system; // machine facts
     this.systemPrompt = systemPrompt;
     this.events = new Emitter();
+    this.log = new SessionLog();
 
     this.history = []; // OpenAI-format messages (no system; that's separate)
     this.busy = false;
@@ -38,6 +44,14 @@ export class Engine {
   // change). Rebuilds the provider so a changed provider TYPE takes effect.
   swapProvider(llm) {
     this.provider = createProvider(llm);
+  }
+
+  // Truncate history to just before message[idx] — used by double-Esc rewind so
+  // the user can re-ask from an earlier point. Everything after idx is dropped.
+  rewindTo(idx) {
+    if (idx >= 0 && idx <= this.history.length) {
+      this.history = this.history.slice(0, idx);
+    }
   }
 
   // Called by the UI when the user resolves an approval card.
@@ -87,12 +101,16 @@ export class Engine {
       onChunk: (chunk) => this.events.emit(EVENTS.TOOL_OUTPUT, { id, chunk }),
     };
 
+    if (name === 'shell') this.log.command(args.command, args.why);
+    else if (name === 'write') this.log.command(`write ${args.path}`, args.why);
+
     let result;
     try {
       result = await executeTool(name, args, ctx);
     } catch (err) {
       result = { output: `error: ${err.message}`, meta: { error: true } };
     }
+    if (name === 'shell') this.log.output(result.output, result.meta?.exitCode);
     return result;
   }
 
@@ -102,6 +120,7 @@ export class Engine {
     this.busy = true;
     this.abort = new AbortController();
     this.history.push({ role: 'user', content: userText });
+    this.log.user(userText);
 
     try {
       await this._loop();
@@ -119,7 +138,15 @@ export class Engine {
   }
 
   async _loop() {
-    for (let turn = 0; turn < MAX_TURNS; turn++) {
+    let warned = false;
+    for (let turn = 0; turn < HARD_LIMIT; turn++) {
+      if (turn === SOFT_WARN_TURNS && !warned) {
+        warned = true;
+        this.events.emit(EVENTS.NOTICE, {
+          text: `${SOFT_WARN_TURNS}+ steps in a row — still going (esc to stop anytime)`,
+          level: 'warn',
+        });
+      }
       const started = Date.now();
       let textBuf = '';
       let reasoningBuf = '';
@@ -145,6 +172,7 @@ export class Engine {
       if (!resp.toolCalls || resp.toolCalls.length === 0) {
         const text = (resp.text || '').trim();
         this.history.push({ role: 'assistant', content: resp.text || '' });
+        this.log.assistant(text);
         this.events.emit(EVENTS.ASSISTANT_DONE, { text: resp.text || '', reasoning: resp.reasoning, ms });
         // Empty reply (common with thinking models when the trace eats the token
         // budget) — tell the user instead of silently leaving a blank.
@@ -167,6 +195,7 @@ export class Engine {
 
       // Flush any assistant prose that preceded the tool call.
       if (resp.text && resp.text.trim()) {
+        this.log.assistant(resp.text);
         this.events.emit(EVENTS.ASSISTANT_DONE, { text: resp.text, reasoning: resp.reasoning, ms });
       }
 
@@ -211,7 +240,7 @@ export class Engine {
     }
 
     this.events.emit(EVENTS.NOTICE, {
-      text: `hit the ${MAX_TURNS}-step safety cap — your turn`,
+      text: `reached ${HARD_LIMIT} steps — stopping (this shouldn't happen; esc next time)`,
       level: 'warn',
     });
   }
