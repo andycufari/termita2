@@ -43,6 +43,7 @@ export function Banner() {
 export function HelpPanel() {
   const rows = [
     ['/help', 'show this'],
+    ['/setup', 'configure provider / model'],
     ['/model [id]', 'list / switch model'],
     ['/reasoning on|off', 'toggle thinking trace'],
     ['/auto', 'toggle auto-approve (or TAB)'],

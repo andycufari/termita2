@@ -10,6 +10,7 @@ import {
   clampForModel,
 } from '../tools/index.js';
 import { shellState } from '../tools/shell.js';
+import { createProvider } from '../providers/index.js';
 
 const MAX_TURNS = 16;
 
@@ -31,6 +32,12 @@ export class Engine {
 
   on(fn) {
     return this.events.on(fn);
+  }
+
+  // Swap the LLM backend at runtime (e.g. after the setup wizard or a provider
+  // change). Rebuilds the provider so a changed provider TYPE takes effect.
+  swapProvider(llm) {
+    this.provider = createProvider(llm);
   }
 
   // Called by the UI when the user resolves an approval card.

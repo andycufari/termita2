@@ -107,15 +107,24 @@ termita
 
 ## First run & config
 
-On first launch termita probes your machine and writes a config file:
+Just run `termita`. On first launch an **interactive setup wizard** walks you
+through it — pick your provider (Local / OpenAI / Anthropic), enter the endpoint
+or API key, and choose a model (fetched live from the server when possible). No
+JSON editing required.
+
+Re-run the wizard anytime with **`/setup`** inside termita.
+
+Settings are saved to:
 
 - **Config:** `~/.config/termita/config.json` (respects `$XDG_CONFIG_HOME`)
 - **System facts:** `~/.config/termita/system.json` (re-probe with `termita init`)
 
 ```sh
-termita init      # probe system + write config
-termita doctor    # check endpoint, model, node version
+termita doctor    # check provider, endpoint, model, node version
+termita init      # re-probe system facts
 ```
+
+You can still edit `config.json` by hand if you prefer — here's the shape:
 
 ### config.json
 
@@ -210,6 +219,7 @@ dangerous patterns, which always prompt with a red warning. File writes auto-run
 | Command              | Action                                          |
 |----------------------|-------------------------------------------------|
 | `/help`              | show commands + keys                            |
+| `/setup`             | re-run the provider / model setup wizard        |
 | `/model [id]`        | list models / switch the active model           |
 | `/reasoning on\|off` | toggle the thinking trace                        |
 | `/auto`              | toggle auto-approve (same as TAB)               |

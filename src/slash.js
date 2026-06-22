@@ -19,6 +19,11 @@ export async function runSlash(line, ctx) {
       ctx.quit();
       return;
 
+    case 'setup':
+    case 'config':
+      ctx.openSetup?.();
+      return;
+
     case 'clean':
     case 'clear':
       engine.clearHistory();

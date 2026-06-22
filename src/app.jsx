@@ -6,20 +6,22 @@ import { Box, Text, Static, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { EVENTS } from './engine/events.js';
 import { theme, glyphs } from './ui/theme.js';
-import { Header, Banner, HelpPanel } from './ui/banner.jsx';
+import { Banner, HelpPanel } from './ui/banner.jsx';
 import {
   Message, StreamingMessage, ToolCard, OutputStream, ApprovalMenu, APPROVAL_ACTIONS, Notice, ErrorBox, Spinner,
 } from './ui/components.jsx';
 import { saveConfig } from './config/config.js';
 import { runSlash } from './slash.js';
+import Setup from './ui/setup.jsx';
 
 let _id = 0;
 const uid = () => `i${++_id}`;
 
-export default function App({ engine, config, provider }) {
+export default function App({ engine, config, provider, needsSetup }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
 
+  const [setupOpen, setSetupOpen] = useState(!!needsSetup);
   const [items, setItems] = useState([]); // transcript items
   const [input, setInput] = useState('');
   const [stream, setStream] = useState(null); // { text, thinking }
@@ -144,6 +146,7 @@ export default function App({ engine, config, provider }) {
         setReasoning: (v) => doSetReasoning(v),
         setModel: (m) => { setModel(m); config.llm.model = m; saveConfig(config); },
         showHelp: () => push({ kind: 'help' }),
+        openSetup: () => setSetupOpen(true),
         quit: () => exit(),
         setStatus,
       });
@@ -175,7 +178,27 @@ export default function App({ engine, config, provider }) {
     push({ kind: 'notice', text: `reasoning ${v ? 'on' : 'off'}`, level: 'dim' });
   }, [config, provider, push]);
 
+  // Onboarding wizard finished -> merge llm settings, swap the live provider.
+  const onSetupDone = useCallback((llm) => {
+    Object.assign(config.llm, llm);
+    saveConfig(config);
+    // rebuild the provider in case the provider TYPE changed (compat->anthropic)
+    engine.swapProvider(config.llm);
+    setModel(config.llm.model);
+    setSetupOpen(false);
+    setShowBanner(false);
+    push({ kind: 'notice', text: `set up ${config.llm.provider} · ${config.llm.model} — ready`, level: 'ok' });
+  }, [config, engine, push]);
+
+  const onSetupCancel = useCallback(() => {
+    setSetupOpen(false);
+    if (!config.llm.model) {
+      push({ kind: 'notice', text: 'setup skipped — run /setup anytime to configure a model', level: 'warn' });
+    }
+  }, [config, push]);
+
   // --- Key handling: approval, edit, interrupt, tab, ctrl-c -----------------
+  // Disabled while the setup wizard is open (it owns the keyboard).
   useInput((inputCh, key) => {
     // Edit mode handled by its own TextInput; ignore here
     if (editing) {
@@ -207,7 +230,7 @@ export default function App({ engine, config, provider }) {
       if (hit) chooseAction(hit.kind);
       return;
     }
-  });
+  }, { isActive: !setupOpen });
 
   // Run the chosen approval action (from key or Enter-on-highlight).
   const chooseAction = useCallback((kind) => {
@@ -267,49 +290,56 @@ export default function App({ engine, config, provider }) {
       {/* approval bar for the pending tool */}
       {pending && <ApprovalMenu selected={selected} danger={!!pending.danger} />}
 
-      {/* busy spinner when waiting on first token (shows it's alive) */}
-      {busy && !stream && !pending && !editing && (
-        <Box paddingLeft={2}>
-          <Spinner label={status || 'thinking…'} />
-          {busyAt ? <Text color={theme.faint}>  </Text> : null}
-          {busyAt ? <ElapsedInline since={busyAt} /> : null}
-        </Box>
+      {/* onboarding wizard takes over the input region when open */}
+      {setupOpen ? (
+        <Setup initial={config.llm} onDone={onSetupDone} onCancel={onSetupCancel} />
+      ) : (
+        <>
+          {/* busy spinner when waiting on first token (shows it's alive) */}
+          {busy && !stream && !pending && !editing && (
+            <Box paddingLeft={2}>
+              <Spinner label={status || 'thinking…'} />
+              {busyAt ? <Text color={theme.faint}>  </Text> : null}
+              {busyAt ? <ElapsedInline since={busyAt} /> : null}
+            </Box>
+          )}
+
+          {/* input / edit prompt */}
+          <Box>
+            {editing ? (
+              <>
+                <Text color={theme.warn}>{glyphs.bolt} edit </Text>
+                <TextInput value={editing.value} onChange={(v) => setEditing((e) => ({ ...e, value: v }))} onSubmit={submitEdit} />
+              </>
+            ) : (
+              <>
+                <Text color={pending ? theme.faint : theme.accent} bold>{glyphs.prompt} </Text>
+                <PromptInput
+                  value={input}
+                  onChange={setInput}
+                  onSubmit={submit}
+                  disabled={!!pending}
+                  history={inputHistory}
+                  histIdx={histIdx}
+                  setInput={setInput}
+                />
+              </>
+            )}
+          </Box>
+
+          {/* footer: live status (model/AUTO/reasoning) + contextual hint */}
+          <Box paddingLeft={1} justifyContent="space-between">
+            <Text color={theme.faint}>
+              {pending ? '↑↓ + enter · or R/E/A/N · esc cancels' : busy ? 'esc to interrupt' : '/help · /setup · tab auto-approve'}
+            </Text>
+            <Text>
+              {autoApprove && <Text color={theme.warn} bold>AUTO {glyphs.bolt} </Text>}
+              {reasoning && <Text color={theme.faint}>{glyphs.thought} think </Text>}
+              <Text color={theme.brandDim}>{model}</Text>
+            </Text>
+          </Box>
+        </>
       )}
-
-      {/* input / edit prompt */}
-      <Box>
-        {editing ? (
-          <>
-            <Text color={theme.warn}>{glyphs.bolt} edit </Text>
-            <TextInput value={editing.value} onChange={(v) => setEditing((e) => ({ ...e, value: v }))} onSubmit={submitEdit} />
-          </>
-        ) : (
-          <>
-            <Text color={pending ? theme.faint : theme.accent} bold>{glyphs.prompt} </Text>
-            <PromptInput
-              value={input}
-              onChange={setInput}
-              onSubmit={submit}
-              disabled={!!pending}
-              history={inputHistory}
-              histIdx={histIdx}
-              setInput={setInput}
-            />
-          </>
-        )}
-      </Box>
-
-      {/* footer: live status (model/AUTO/reasoning) + contextual hint, one line */}
-      <Box paddingLeft={1} justifyContent="space-between">
-        <Text color={theme.faint}>
-          {pending ? '↑↓ + enter · or R/E/A/N · esc cancels' : busy ? 'esc to interrupt' : '/help · tab auto-approve · esc interrupt'}
-        </Text>
-        <Text>
-          {autoApprove && <Text color={theme.warn} bold>AUTO {glyphs.bolt} </Text>}
-          {reasoning && <Text color={theme.faint}>{glyphs.thought} think </Text>}
-          <Text color={theme.brandDim}>{model}</Text>
-        </Text>
-      </Box>
     </Box>
   );
 }

@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 // Entry point: parse argv (init | doctor | run-default), bootstrap, render Ink.
 import process from 'node:process';
+import pkg from '../package.json' with { type: 'json' };
 import { loadConfig, saveConfig, configExists, CONFIG_PATH, SYSTEM_PATH } from './config/config.js';
 import { probeSystem, saveSystem, getSystem } from './config/system.js';
+
+export const VERSION = pkg.version;
 
 const argv = process.argv.slice(2);
 const sub = argv[0];
@@ -70,7 +73,7 @@ async function cmdDoctor() {
 
 function help() {
   console.log(`
-  ${c.magenta(c.bold('termita'))} ${c.dim('2.0 — terminal copilot')}
+  ${c.magenta(c.bold('termita'))} ${c.dim(`${VERSION} — terminal copilot`)}
 
   ${c.bold('usage')}
     termita            ${c.dim('open the chat TUI')}
@@ -82,12 +85,13 @@ function help() {
 
 async function bootstrapTUI() {
   // auto-init on first run
-  if (!configExists()) {
-    await cmdInit();
-    console.log(c.dim('  launching…\n'));
-  }
+  // First run = no config file yet. We DON'T silently write defaults anymore;
+  // the in-TUI setup wizard handles configuration. Just probe the system.
+  const firstRun = !configExists();
   const config = loadConfig();
   const system = getSystem();
+  // Show the wizard if there's no config yet, or no model has been chosen.
+  const needsSetup = firstRun || !config.llm.model;
 
   const [{ default: React }, { render }] = await Promise.all([
     import('react'),
@@ -104,11 +108,8 @@ async function bootstrapTUI() {
   const systemPrompt = buildSystemPrompt(system);
   const engine = new Engine({ provider, gate, system, systemPrompt });
 
-  // warn if endpoint is non-local (output leaves the machine)
-  const isLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(config.llm.endpoint);
-
   const { waitUntilExit } = render(
-    React.createElement(App, { engine, config, provider, isLocal }),
+    React.createElement(App, { engine, config, provider, needsSetup }),
     { exitOnCtrlC: false },
   );
   await waitUntilExit();
@@ -119,7 +120,7 @@ async function bootstrapTUI() {
     if (sub === 'init') await cmdInit({ probe: argv.includes('--probe') });
     else if (sub === 'doctor') await cmdDoctor();
     else if (sub === '--help' || sub === '-h' || sub === 'help') help();
-    else if (sub === '--version' || sub === '-v') console.log('termita 2.0.0');
+    else if (sub === '--version' || sub === '-v') console.log(`termita ${VERSION}`);
     else await bootstrapTUI();
   } catch (err) {
     console.error(c.red(`\ntermita: ${err.stack || err.message}\n`));
