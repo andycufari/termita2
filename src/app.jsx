@@ -94,22 +94,35 @@ export default function App({ engine, config, provider, needsSetup }) {
           break;
         case EVENTS.TOOL_RUNNING:
           setPending(null);
-          outputBuffers.current[ev.id] = '';
-          patchItem(ev.id, { status: 'running', output: '', startedAt: Date.now() });
+          outputBuffers.current[ev.id] = ''; // holds a partial (unterminated) line
+          patchItem(ev.id, { status: 'running', startedAt: Date.now() });
           break;
         case EVENTS.TOOL_OUTPUT: {
-          const prev = outputBuffers.current[ev.id] || '';
-          const next = prev + ev.chunk + (ev.chunk.endsWith('\n') ? '' : '\n');
-          outputBuffers.current[ev.id] = next;
-          patchItem(ev.id, { output: next });
+          // Stream output as complete LINES into the transcript (→ Static →
+          // terminal scrollback). Each line prints immediately and stays, so it
+          // streams live AND scrolls natively, no fixed box to clip it.
+          const buf = (outputBuffers.current[ev.id] || '') + ev.chunk;
+          const parts = buf.split('\n');
+          const partial = parts.pop(); // last piece may be an incomplete line
+          outputBuffers.current[ev.id] = partial;
+          if (parts.length) {
+            setItems((cur) => [...cur, ...parts.map((line) => ({ _k: uid(), kind: 'output', text: line }))]);
+          }
           break;
         }
-        case EVENTS.TOOL_DONE:
-          patchItem(ev.id, {
-            status: 'done', output: ev.output, exitCode: ev.meta?.exitCode,
-            interrupted: ev.meta?.interrupted, hidden: ev.name === 'read' || ev.name === 'grep' ? false : false,
+        case EVENTS.TOOL_DONE: {
+          // flush any trailing partial line, then a status line
+          const partial = outputBuffers.current[ev.id];
+          outputBuffers.current[ev.id] = '';
+          setItems((cur) => {
+            const add = [];
+            if (partial && partial.length) add.push({ _k: uid(), kind: 'output', text: partial });
+            add.push({ _k: uid(), kind: 'tooldone', exitCode: ev.meta?.exitCode, interrupted: ev.meta?.interrupted });
+            return [...cur, ...add];
           });
+          patchItem(ev.id, { status: 'done' });
           break;
+        }
         case EVENTS.TURN_DONE:
           setStream(null);
           setStatus(null);
@@ -352,11 +365,16 @@ export default function App({ engine, config, provider, needsSetup }) {
   // Split the transcript: SETTLED items go into <Static> (rendered ONCE, never
   // redrawn — this is what kills the per-keystroke flicker). Only LIVE items (a
   // tool still proposed/running) and the input region re-render on each key.
-  const isSettled = (it) => it.kind !== 'tool' || it.status === 'done';
+  // A tool card settles into Static as soon as it's running/done (the card
+  // itself never changes after that; output streams as separate Static lines
+  // below it). Only a tool still awaiting approval ('proposed') stays live.
+  const isSettled = (it) => it.kind !== 'tool' || it.status !== 'proposed';
   const settled = items.filter(isSettled);
   const live = items.filter((it) => !isSettled(it));
-  // a tool is actively running (its OutputStream already shows a "running" spinner)
-  const toolRunning = live.some((it) => it.kind === 'tool' && it.status === 'running');
+  // a tool is actively running (output streams as Static lines; show a small
+  // "running" indicator in the live region with its own timer)
+  const runningTool = items.find((it) => it.kind === 'tool' && it.status === 'running');
+  const toolRunning = !!runningTool;
 
   // rough token estimate of the session (chars/4) + configurable context size
   const tokens = estimateTokens(engine.history);
@@ -399,6 +417,24 @@ export default function App({ engine, config, provider, needsSetup }) {
         <Setup initial={config.llm} onDone={onSetupDone} onCancel={onSetupCancel} />
       ) : (
         <>
+          {/* live indicators: a running command, OR the model thinking (not both).
+              Output itself streams into scrollback above as 'output' lines. */}
+          {runningTool && (
+            <Box paddingLeft={2}>
+              <Spinner label="running" color={theme.brand} />
+              <Text color={theme.faint}> </Text>
+              {runningTool.startedAt ? <ElapsedInline since={runningTool.startedAt} /> : null}
+              <Text color={theme.faint}> · esc to stop</Text>
+            </Box>
+          )}
+          {busy && !toolRunning && !stream && !pending && !editing && (
+            <Box paddingLeft={2}>
+              <Spinner label={status || 'thinking'} />
+              <Text color={theme.faint}> </Text>
+              {busyAt ? <ElapsedInline since={busyAt} /> : null}
+            </Box>
+          )}
+
           {/* queued messages (typed while busy) — sent in order when free */}
           {queue.length > 0 && (
             <Box flexDirection="column" paddingLeft={2}>
@@ -432,25 +468,16 @@ export default function App({ engine, config, provider, needsSetup }) {
             )}
           </Box>
 
-          {/* footer: live status line. left = activity (thinking timer / hint),
-              right = AUTO legend · tokens/context · model */}
+          {/* footer: hint on the left, AUTO legend · tokens · model on the right.
+              No thinking spinner here — the term block above owns that, so we
+              don't double it. */}
           <Box paddingLeft={1} justifyContent="space-between">
-            <Box>
-              {busy && !toolRunning && !pending ? (
-                <>
-                  <Spinner label={status || 'thinking'} />
-                  <Text color={theme.faint}> </Text>
-                  {busyAt ? <ElapsedInline since={busyAt} /> : null}
-                  <Text color={theme.faint}> · esc to stop</Text>
-                </>
-              ) : (
-                <Text color={theme.faint}>
-                  {pending ? '↑↓ + enter · or R/E/A/N · esc cancels'
-                    : toolRunning ? 'running… esc to stop'
-                    : '/help · /setup · tab auto-approve · esc esc to jump back'}
-                </Text>
-              )}
-            </Box>
+            <Text color={theme.faint}>
+              {pending ? '↑↓ + enter · or R/E/A/N · esc cancels'
+                : toolRunning ? 'running… esc to stop'
+                : busy ? 'esc to interrupt'
+                : '/help · /setup · tab auto-approve · esc esc to jump back'}
+            </Text>
             <Text>
               {autoApprove && <Text color={theme.warn} bold>AUTO {glyphs.bolt} (tab off) </Text>}
               {reasoning && <Text color={theme.faint}>{glyphs.thought} think </Text>}
@@ -529,14 +556,16 @@ function TranscriptItem({ item }) {
     case 'msg':
       return <Message who={item.who} text={item.text} reasoning={item.reasoning} thoughtMs={item.thoughtMs} />;
     case 'tool':
-      return (
-        <Box flexDirection="column">
-          <ToolCard name={item.name} args={item.args} danger={item.danger} status={item.status} awaiting={item.status === 'running'} />
-          {(item.status === 'running' || item.status === 'done') && (
-            <OutputStream text={item.output} done={item.status === 'done'} exitCode={item.exitCode} interrupted={item.interrupted} startedAt={item.startedAt} />
-          )}
-        </Box>
-      );
+      // just the proposal card; output streams below as separate 'output' items
+      return <ToolCard name={item.name} args={item.args} danger={item.danger} status={item.status} />;
+    case 'output':
+      // one line of shell output — dim, indented, prints into scrollback live
+      return <Text color={theme.dim} wrap="wrap">  │ {item.text || ' '}</Text>;
+    case 'tooldone': {
+      const color = item.interrupted ? theme.warn : (item.exitCode === 0 || item.exitCode == null) ? theme.okDim : theme.danger;
+      const label = item.interrupted ? '⊘ interrupted' : (item.exitCode === 0 || item.exitCode == null) ? '✓ done' : `✗ exit ${item.exitCode}`;
+      return <Text color={color} bold>  {label}</Text>;
+    }
     case 'notice':
       return <Notice text={item.text} level={item.level} />;
     case 'error':
