@@ -184,6 +184,7 @@ export default function App({ engine, config, provider, needsSetup }) {
         toggleAuto: () => doToggleAuto(),
         setReasoning: (v) => doSetReasoning(v),
         setModel: (m) => { setModel(m); config.llm.model = m; saveConfig(config); },
+        setMaxTokens: (n) => doSetMaxTokens(n),
         showHelp: () => push({ kind: 'help' }),
         openSetup: () => setSetupOpen(true),
         quit: () => exit(),
@@ -215,6 +216,13 @@ export default function App({ engine, config, provider, needsSetup }) {
     provider.llm.reasoning = v;
     saveConfig(config);
     push({ kind: 'notice', text: `reasoning ${v ? 'on' : 'off'}`, level: 'dim' });
+  }, [config, provider, push]);
+
+  const doSetMaxTokens = useCallback((n) => {
+    config.llm.maxTokens = n;
+    provider.llm.maxTokens = n; // live: providers read this at request time
+    saveConfig(config);
+    push({ kind: 'notice', text: `maxTokens → ${n}`, level: 'ok' });
   }, [config, provider, push]);
 
   // Onboarding wizard finished -> merge llm settings, swap the live provider.
@@ -379,6 +387,9 @@ export default function App({ engine, config, provider, needsSetup }) {
   // rough token estimate of the session (chars/4) + configurable context size
   const tokens = estimateTokens(engine.history);
   const contextSize = config.llm.contextSize || 8192;
+  const ctxPct = Math.min(100, Math.round((tokens / contextSize) * 100));
+  // colour the gauge by how full the window is: dim < 60% < amber < 85% < red
+  const ctxColor = ctxPct >= 85 ? theme.danger : ctxPct >= 60 ? theme.warn : theme.dim;
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -445,7 +456,13 @@ export default function App({ engine, config, provider, needsSetup }) {
           )}
 
           {/* input / edit prompt */}
-          <Box>
+          <Box
+            borderStyle="round"
+            borderColor={pending ? theme.faint : theme.accent}
+            borderLeft={false}
+            borderRight={false}
+            paddingX={1}
+          >
             {editing ? (
               <>
                 <Text color={theme.warn}>{glyphs.bolt} edit </Text>
@@ -481,7 +498,7 @@ export default function App({ engine, config, provider, needsSetup }) {
             <Text>
               {autoApprove && <Text color={theme.warn} bold>AUTO {glyphs.bolt} (tab off) </Text>}
               {reasoning && <Text color={theme.faint}>{glyphs.thought} think </Text>}
-              <Text color={theme.dim}>{fmtTokens(tokens)}/{fmtTokens(contextSize)} </Text>
+              <Text color={ctxColor}>ctx {fmtTokens(tokens)}/{fmtTokens(contextSize)} {ctxPct}% </Text>
               <Text color={theme.brandDim}>{model}</Text>
             </Text>
           </Box>
@@ -500,10 +517,16 @@ function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, se
     // whole point: interrupt the running command / streaming turn.
     if (key.escape) { onEscape?.(); return; }
     if (disabled) return;
-    // Shift+Enter (or Alt+Enter) inserts a newline instead of submitting.
-    // Terminals that report the modifier get true multiline; others can also
-    // type a trailing "\" to continue on the next line (handled in onSubmit).
+    // Newline-without-submit. Three ways, by terminal capability:
+    //  - Shift+Enter / Alt+Enter: works only in terminals that report the
+    //    modifier (iTerm, kitty, Windows Terminal). Konsole/xterm do NOT —
+    //    they send a bare \r identical to Enter, so key.shift is never set.
+    //  - Ctrl+J: portable fallback. Ctrl+J is a literal line-feed (\n) that
+    //    every terminal — Konsole included — passes through distinctly from
+    //    Enter's \r, so Ink sees it here while Enter still submits.
+    //  - trailing "\" on submit (handled in handleSubmit below).
     if (key.return && (key.shift || key.meta)) { onChange(value + '\n'); return; }
+    if (key.ctrl && ch === 'j') { onChange(value + '\n'); return; }
     if (key.upArrow) {
       const h = history.current;
       if (h.length === 0) return;
@@ -523,7 +546,7 @@ function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, se
   };
 
   if (disabled) return <Text color={theme.faint}>{value || '(running… esc to stop)'}</Text>;
-  return <TextInput value={value} onChange={onChange} onSubmit={handleSubmit} placeholder="talk to termita…  (shift+enter or \ = newline)" />;
+  return <TextInput value={value} onChange={onChange} onSubmit={handleSubmit} placeholder="talk to termita…  (ctrl+j, shift+enter, or \ = newline)" />;
 }
 
 // Rough token estimate: ~4 chars/token across all message content.

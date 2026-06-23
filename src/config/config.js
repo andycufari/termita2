@@ -18,7 +18,7 @@ export const DEFAULT_CONFIG = {
     endpoint: 'http://localhost:1234/v1', // base URL (openai-compatible)
     model: 'qwen3.6-27b',
     apiKey: 'lm-studio', // ignored by LM Studio; required by OpenAI/Anthropic
-    maxTokens: 4096,
+    maxTokens: 16384,
     contextSize: 8192, // model context window, for the token gauge in the footer
     reasoning: false,
   },

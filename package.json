@@ -1,6 +1,6 @@
 {
   "name": "termita",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Terminal copilot — chat with an LLM that operates your shell, one approved command at a time. Local-first (LM Studio/Ollama), or OpenAI/Anthropic.",
   "type": "module",
   "bin": {

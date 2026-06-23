@@ -59,6 +59,21 @@ export async function runSlash(line, ctx) {
       return;
     }
 
+    case 'maxtokens':
+    case 'tokens': {
+      if (!arg) {
+        push({ kind: 'notice', text: `maxTokens: ${config.llm.maxTokens} — /maxtokens <n> to change`, level: 'dim' });
+        return;
+      }
+      const n = Number.parseInt(arg, 10);
+      if (!Number.isFinite(n) || n < 256) {
+        push({ kind: 'notice', text: `maxTokens must be an integer ≥ 256 (got "${arg}")`, level: 'warn' });
+        return;
+      }
+      ctx.setMaxTokens(n);
+      return;
+    }
+
     case 'allow':
     case 'allowlist': {
       const rules = config.policy.allowlist;

@@ -46,9 +46,10 @@ export function HelpPanel() {
     ['/setup', 'configure provider / model'],
     ['/model [id]', 'list / switch model'],
     ['/reasoning on|off', 'toggle thinking trace'],
+    ['/maxtokens [n]', 'show / set reply token budget'],
     ['/auto', 'toggle auto-approve (or TAB)'],
     ['/clean', 'wipe transcript + history'],
-    ['/compact', 'summarize history, free context'],
+    ['/compact', 'summarize history, free context (ctx gauge)'],
     ['/allow', 'list allowlist rules'],
     ['/quit', 'exit (or ctrl-c twice)'],
   ];
