@@ -7,7 +7,7 @@ await esbuild.build({
   entryPoints: ['src/cli.js'],
   bundle: true,
   platform: 'node',
-  target: 'node20',
+  target: 'node22',
   format: 'esm',
   outfile: 'dist/cli.js',
   jsx: 'automatic',

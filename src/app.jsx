@@ -2,7 +2,7 @@
 // commands, subscribes to engine events. The engine is UI-agnostic; this is the
 // only place that knows about both.
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Box, Text, Static, useApp, useInput, useStdout } from 'ink';
+import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { EVENTS } from './engine/events.js';
 import { theme, glyphs } from './ui/theme.js';
@@ -44,7 +44,12 @@ export default function App({ engine, config, provider, needsSetup }) {
   const [cmdSel, setCmdSel] = useState(0); // highlighted item in the `/` autocomplete
   const [picker, setPicker] = useState(null); // { models:[id], sel } interactive /model picker
 
-  const { columns } = useTerminalSize(); // reactive terminal width (responsive)
+  const { columns, rows } = useTerminalSize(); // reactive terminal size (responsive)
+
+  // In-app transcript scroll (alt-screen has no native scrollback). `scrollUp`
+  // is how many lines we've scrolled UP from the bottom; 0 = pinned to bottom
+  // (auto-follows new output). PageUp/PageDown adjust it (see useInput).
+  const [scrollUp, setScrollUp] = useState(0);
 
   const inputHistory = useRef([]);
   const histIdx = useRef(-1);
@@ -61,6 +66,18 @@ export default function App({ engine, config, provider, needsSetup }) {
 
   // reset the autocomplete highlight whenever the typed command changes
   useEffect(() => { setCmdSel(0); }, [input]);
+
+  // Keep the scroll position stable when the transcript changes. If we're
+  // scrolled up and new items arrive, bump `scrollUp` by the delta so the view
+  // stays anchored on the same content instead of drifting toward the bottom.
+  // If items shrink (/clear, rewind), clamp so we don't scroll past the top.
+  const prevItemCount = useRef(items.length);
+  useEffect(() => {
+    const delta = items.length - prevItemCount.current;
+    prevItemCount.current = items.length;
+    if (delta > 0) setScrollUp((s) => (s > 0 ? s + delta : 0)); // anchored only when already scrolled up
+    else if (delta < 0) setScrollUp((s) => Math.min(s, items.length));
+  }, [items.length]);
 
   const patchItem = useCallback((id, patch) => {
     setItems((cur) => cur.map((it) => (it.toolId === id ? { ...it, ...patch } : it)));
@@ -110,9 +127,9 @@ export default function App({ engine, config, provider, needsSetup }) {
           patchItem(ev.id, { status: 'running', startedAt: Date.now() });
           break;
         case EVENTS.TOOL_OUTPUT: {
-          // Stream output as complete LINES into the transcript (→ Static →
-          // terminal scrollback). Each line prints immediately and stays, so it
-          // streams live AND scrolls natively, no fixed box to clip it.
+          // Stream output as complete LINES into the transcript. Each line is a
+          // transcript item, so it shows live and scrolls with the in-app
+          // viewport (alt-screen → no native scrollback).
           const buf = (outputBuffers.current[ev.id] || '') + ev.chunk;
           const parts = buf.split('\n');
           const partial = parts.pop(); // last piece may be an incomplete line
@@ -342,6 +359,15 @@ export default function App({ engine, config, provider, needsSetup }) {
   // --- Key handling: approval, edit, interrupt, tab, ctrl-c -----------------
   // Disabled while the setup wizard is open (it owns the keyboard).
   useInput((inputCh, key) => {
+    // Transcript scroll (alt-screen has no native scrollback). Works in any
+    // state so you can scroll while busy/streaming. PgUp/PgDn step by ~a page;
+    // Home jumps to the top, End/PgDn-to-0 returns to the latest. `scrollUp` is
+    // clamped to the item count in render; stepping past the end pins to bottom.
+    if (key.pageUp) { setScrollUp((s) => Math.min(items.length, s + 5)); return; }
+    if (key.pageDown) { setScrollUp((s) => Math.max(0, s - 5)); return; }
+    if (key.home && items.length) { setScrollUp(items.length); return; }
+    if (key.end) { setScrollUp(0); return; }
+
     // Edit mode handled by its own TextInput; ignore here
     if (editing) {
       if (key.escape) { setEditing(null); engine.resolveDecision({ kind: 'no' }); }
@@ -426,17 +452,8 @@ export default function App({ engine, config, provider, needsSetup }) {
   }, []);
 
   // --- Render ---------------------------------------------------------------
-  // Split the transcript: SETTLED items go into <Static> (rendered ONCE, never
-  // redrawn — this is what kills the per-keystroke flicker). Only LIVE items (a
-  // tool still proposed/running) and the input region re-render on each key.
-  // A tool card settles into Static as soon as it's running/done (the card
-  // itself never changes after that; output streams as separate Static lines
-  // below it). Only a tool still awaiting approval ('proposed') stays live.
-  const isSettled = (it) => it.kind !== 'tool' || it.status !== 'proposed';
-  const settled = items.filter(isSettled);
-  const live = items.filter((it) => !isSettled(it));
-  // a tool is actively running (output streams as Static lines; show a small
-  // "running" indicator in the live region with its own timer)
+  // a tool is actively running — show a small "running" indicator with its own
+  // timer in the live region below the transcript.
   const runningTool = items.find((it) => it.kind === 'tool' && it.status === 'running');
   const toolRunning = !!runningTool;
 
@@ -447,26 +464,42 @@ export default function App({ engine, config, provider, needsSetup }) {
   // colour the gauge by how full the window is: dim < 60% < amber < 85% < red
   const ctxColor = ctxPct >= 85 ? theme.danger : ctxPct >= 60 ? theme.warn : theme.dim;
 
+  // Transcript items shown in the scroll viewport. We're in alt-screen now, so
+  // there's no native scrollback: the whole transcript is one in-app-scrolled
+  // region. `scrollUp` drops that many items from the BOTTOM (so older content
+  // shows); the clipped, bottom-pinned Box keeps only what fits the viewport.
+  const allItems = items; // proposed/running/done all render the same in-band
+  const shownItems = scrollUp > 0 ? allItems.slice(0, Math.max(0, allItems.length - scrollUp)) : allItems;
+  const atBottom = scrollUp === 0;
+
   return (
-    <Box flexDirection="column" paddingX={1}>
-      {/* Everything settled is printed ONCE via <Static> — Ink writes it to the
-          terminal permanently and never redraws it. The banner is ALWAYS the
-          first static item and is NEVER removed: Ink's <Static> tracks how many
-          items it has emitted by COUNT, so dropping item 0 (the banner) mid-run
-          shifts every index and makes it skip the next appended item — that was
-          the "/help shows nothing the first time" bug. It just scrolls away as
-          the transcript grows, which is the behaviour we want anyway. */}
-      <Static items={[{ _k: '__banner__' }, ...settled]}>
-        {(it) => (it._k === '__banner__' ? <Banner key="__banner__" /> : <TranscriptItem key={it._k} item={it} />)}
-      </Static>
+    <Box flexDirection="column" paddingX={1} height={rows}>
+      {/* Transcript viewport: flexGrow takes whatever height the live region
+          below doesn't use; overflowY:hidden + justifyContent:flex-end clip to
+          the latest content (pinned to bottom). Alt-screen repaints the whole
+          buffer each frame, so resize can't strand ghosts here. */}
+      <Box flexGrow={1} flexShrink={1} flexDirection="column" overflowY="hidden" justifyContent="flex-end">
+        <Box flexDirection="column" flexShrink={0}>
+          <Banner />
+          {shownItems.map((it) => (
+            <TranscriptItem key={it._k} item={it} />
+          ))}
+          {/* live streaming assistant rides at the bottom of the transcript */}
+          {atBottom && stream && <StreamingMessage text={stream.text} thinking={stream.thinking && !stream.text} startedAt={stream.startedAt} />}
+        </Box>
+      </Box>
 
-      {/* live (in-flight) transcript items re-render here */}
-      {live.map((it) => (
-        <TranscriptItem key={it._k} item={it} />
-      ))}
-
-      {/* live streaming assistant */}
-      {stream && <StreamingMessage text={stream.text} thinking={stream.thinking && !stream.text} startedAt={stream.startedAt} />}
+      {/* Bottom chrome (indicators, overlays, input, footer). flexShrink={0} so
+          it ALWAYS gets its full height — only the transcript viewport above
+          shrinks. Without this the greedy transcript squeezes the input box off
+          the bottom of the screen when the transcript overflows. */}
+      <Box flexDirection="column" flexShrink={0}>
+      {/* scroll indicator when not pinned to the bottom */}
+      {!atBottom && (
+        <Box paddingLeft={1}>
+          <Text color={theme.faint}>↑ scrolled up {scrollUp} · PgDn / End to return to latest</Text>
+        </Box>
+      )}
 
       {/* approval bar for the pending tool */}
       {pending && <ApprovalMenu selected={selected} danger={!!pending.danger} />}
@@ -594,6 +627,7 @@ export default function App({ engine, config, provider, needsSetup }) {
           </Box>
         </>
       )}
+      </Box>
     </Box>
   );
 }

@@ -1,6 +1,6 @@
 {
   "name": "termita",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Terminal copilot — chat with an LLM that operates your shell, one approved command at a time. Local-first (LM Studio/Ollama), or OpenAI/Anthropic.",
   "type": "module",
   "bin": {
@@ -20,7 +20,7 @@
     "url": "https://github.com/andycufari/termita2/issues"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "build": "node build.js",
@@ -47,9 +47,9 @@
   "author": "andycufari",
   "license": "MIT",
   "dependencies": {
-    "ink": "^5.2.1",
+    "ink": "^7.1.0",
     "ink-text-input": "^6.0.0",
-    "react": "^18.3.1"
+    "react": "^19.2.0"
   },
   "devDependencies": {
     "esbuild": "^0.28.1"

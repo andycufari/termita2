@@ -108,9 +108,15 @@ async function bootstrapTUI() {
   const systemPrompt = buildSystemPrompt(system);
   const engine = new Engine({ provider, gate, system, systemPrompt });
 
+  // alternateScreen: render into a dedicated screen buffer (like vim/less) so
+  // the whole UI is repainted each frame. This is the only way to fully kill
+  // terminal-resize ghosting — Ink's inline renderer erases the prior frame by
+  // logical line count and mis-handles reflow on resize (ink#907, still only
+  // half-fixed in v7). The cost is no NATIVE scrollback, so the transcript is a
+  // height-windowed, in-app-scrollable region instead (see app.jsx).
   const { waitUntilExit } = render(
     React.createElement(App, { engine, config, provider, needsSetup }),
-    { exitOnCtrlC: false },
+    { exitOnCtrlC: false, alternateScreen: true },
   );
   await waitUntilExit();
 }

@@ -5,6 +5,33 @@ All notable changes to **termita** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] — 2026-06-26
+
+### Fixed
+- **Terminal resize artifacts** — resizing the window no longer leaves
+  ghost/duplicate copies of the input box, stacked `term` headers, or a
+  disappearing input/context footer. Root cause was a known Ink limitation
+  ([ink#907](https://github.com/vadimdemedes/ink/issues/907)): the inline
+  renderer erases the previous frame by logical line count and mis-handles line
+  reflow on resize (only partially addressed even in Ink 7). Fixed by rendering
+  into the **alternate screen buffer**, which repaints the whole UI each frame
+  so reflow can't strand stale rows.
+
+### Added
+- **In-app transcript scrolling** — since the alternate screen has no native
+  scrollback, the transcript is now a height-bounded, scrollable viewport.
+  `PageUp`/`PageDown` scroll, `Home` jumps to the top, `End` returns to the
+  latest. New output auto-follows the bottom unless you've scrolled up, and a
+  `↑ scrolled up N` indicator shows when you're not pinned to the latest.
+
+### Changed
+- **Upgraded to Ink 7** (`ink` 5 → 7), **React 19.2**, and the build/runtime
+  target to **Node 22** (`engines.node` is now `>=22`). Key handling was audited
+  against Ink 7's breaking changes (`key.backspace` vs `key.delete`, `key.meta`
+  no longer set on Escape) — no behavioral changes were needed.
+- The transcript no longer settles into the terminal's native scrollback; on
+  exit, the alternate screen is torn down and your shell is restored as it was.
+
 ## [2.3.0] — 2026-06-26
 
 ### Added
