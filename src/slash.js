@@ -45,17 +45,10 @@ export async function runSlash(line, ctx) {
     }
 
     case 'model': {
-      if (arg) { ctx.setModel(arg); push({ kind: 'notice', text: `model → ${arg}`, level: 'ok' }); return; }
-      // list models
-      push({ kind: 'notice', text: 'fetching models…', level: 'dim' });
-      try {
-        const models = await provider.listModels();
-        if (!models.length) { push({ kind: 'notice', text: 'no models returned', level: 'warn' }); return; }
-        const list = models.map((m) => `${m === config.llm.model ? glyphs.check + ' ' : '  '}${m}`).join('\n');
-        push({ kind: 'msg', who: 'term', text: `models:\n${list}\n\n/model <id> to switch` });
-      } catch (err) {
-        push({ kind: 'error', message: err.message });
-      }
+      // explicit id still works: `/model gpt-4o`. No arg opens the interactive
+      // arrow-key picker (fetches the list, no typing the id by hand).
+      if (arg) { ctx.setModel(arg); return; }
+      await ctx.openModelPicker();
       return;
     }
 

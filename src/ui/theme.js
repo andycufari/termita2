@@ -46,4 +46,5 @@ export const glyphs = {
   lock: '🔒',
   skull: '☠',
   thought: '✦',
+  termite: 'ƛ', // little mascot glyph for the footer brand
 };

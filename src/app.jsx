@@ -9,10 +9,14 @@ import { theme, glyphs } from './ui/theme.js';
 import { Banner, HelpPanel } from './ui/banner.jsx';
 import {
   Message, StreamingMessage, ToolCard, OutputStream, ApprovalMenu, APPROVAL_ACTIONS, Notice, ErrorBox, Spinner,
+  CommandMenu, MascotTag,
 } from './ui/components.jsx';
 import { saveConfig } from './config/config.js';
 import { runSlash } from './slash.js';
 import Setup from './ui/setup.jsx';
+import { useTerminalSize } from './ui/use-terminal-size.js';
+import { matchCommands } from './ui/commands.js';
+import { VERSION } from './cli.js';
 
 let _id = 0;
 const uid = () => `i${++_id}`;
@@ -31,13 +35,16 @@ export default function App({ engine, config, provider, needsSetup }) {
   const [busy, setBusy] = useState(false);
   const [busyAt, setBusyAt] = useState(null);
   const [queue, setQueue] = useState([]); // messages typed while busy, sent next turn
-  const [showBanner, setShowBanner] = useState(true);
   const [autoApprove, setAutoApprove] = useState(config.policy.autoApprove);
   const [reasoning, setReasoning] = useState(config.llm.reasoning);
   const [model, setModel] = useState(config.llm.model);
   const [status, setStatus] = useState(null);
 
   const [rewind, setRewind] = useState(null); // { points:[{idx,text}], sel } when in jump-back mode
+  const [cmdSel, setCmdSel] = useState(0); // highlighted item in the `/` autocomplete
+  const [picker, setPicker] = useState(null); // { models:[id], sel } interactive /model picker
+
+  const { columns } = useTerminalSize(); // reactive terminal width (responsive)
 
   const inputHistory = useRef([]);
   const histIdx = useRef(-1);
@@ -45,11 +52,15 @@ export default function App({ engine, config, provider, needsSetup }) {
   const lastEsc = useRef(0); // timestamp of last Esc, for double-Esc detection
   const outputBuffers = useRef({}); // id -> accumulated live output
   const queueRef = useRef([]); // mirror of `queue` for the engine event closure
+  const [lastOutputAt, setLastOutputAt] = useState(null); // ts of last live output line
 
   const push = useCallback((item) => setItems((cur) => [...cur, { _k: uid(), ...item }]), []);
 
   // keep queueRef in sync so the engine event closure can read the latest queue
   useEffect(() => { queueRef.current = queue; }, [queue]);
+
+  // reset the autocomplete highlight whenever the typed command changes
+  useEffect(() => { setCmdSel(0); }, [input]);
 
   const patchItem = useCallback((id, patch) => {
     setItems((cur) => cur.map((it) => (it.toolId === id ? { ...it, ...patch } : it)));
@@ -95,6 +106,7 @@ export default function App({ engine, config, provider, needsSetup }) {
         case EVENTS.TOOL_RUNNING:
           setPending(null);
           outputBuffers.current[ev.id] = ''; // holds a partial (unterminated) line
+          setLastOutputAt(Date.now()); // reset the "silent for Ns" timer
           patchItem(ev.id, { status: 'running', startedAt: Date.now() });
           break;
         case EVENTS.TOOL_OUTPUT: {
@@ -106,6 +118,7 @@ export default function App({ engine, config, provider, needsSetup }) {
           const partial = parts.pop(); // last piece may be an incomplete line
           outputBuffers.current[ev.id] = partial;
           if (parts.length) {
+            setLastOutputAt(Date.now()); // we got fresh output → not silent
             setItems((cur) => [...cur, ...parts.map((line) => ({ _k: uid(), kind: 'output', text: line }))]);
           }
           break;
@@ -165,7 +178,6 @@ export default function App({ engine, config, provider, needsSetup }) {
     const text = raw.trim();
     setInput('');
     if (!text) return;
-    setShowBanner(false);
     inputHistory.current.unshift(text);
     histIdx.current = -1;
 
@@ -183,7 +195,8 @@ export default function App({ engine, config, provider, needsSetup }) {
         clearTranscript: () => { setItems([]); setStream(null); },
         toggleAuto: () => doToggleAuto(),
         setReasoning: (v) => doSetReasoning(v),
-        setModel: (m) => { setModel(m); config.llm.model = m; saveConfig(config); },
+        setModel: (m) => doSetModel(m),
+        openModelPicker: () => openModelPicker(),
         setMaxTokens: (n) => doSetMaxTokens(n),
         showHelp: () => push({ kind: 'help' }),
         openSetup: () => setSetupOpen(true),
@@ -225,6 +238,27 @@ export default function App({ engine, config, provider, needsSetup }) {
     push({ kind: 'notice', text: `maxTokens → ${n}`, level: 'ok' });
   }, [config, provider, push]);
 
+  const doSetModel = useCallback((m) => {
+    setModel(m);
+    config.llm.model = m;
+    provider.llm.model = m; // live: providers read this at request time
+    saveConfig(config);
+    push({ kind: 'notice', text: `model → ${m}`, level: 'ok' });
+  }, [config, provider, push]);
+
+  // /model with no arg: fetch the model list and open the arrow-key picker.
+  const openModelPicker = useCallback(async () => {
+    push({ kind: 'notice', text: 'fetching models…', level: 'dim' });
+    try {
+      const models = await provider.listModels();
+      if (!models.length) { push({ kind: 'notice', text: 'no models returned', level: 'warn' }); return; }
+      const cur = models.indexOf(config.llm.model);
+      setPicker({ models, sel: cur >= 0 ? cur : 0 });
+    } catch (err) {
+      push({ kind: 'error', message: err.message });
+    }
+  }, [provider, config, push]);
+
   // Onboarding wizard finished -> merge llm settings, swap the live provider.
   const onSetupDone = useCallback((llm) => {
     Object.assign(config.llm, llm);
@@ -233,7 +267,6 @@ export default function App({ engine, config, provider, needsSetup }) {
     engine.swapProvider(config.llm);
     setModel(config.llm.model);
     setSetupOpen(false);
-    setShowBanner(false);
     push({ kind: 'notice', text: `set up ${config.llm.provider} · ${config.llm.model} — ready`, level: 'ok' });
   }, [config, engine, push]);
 
@@ -299,6 +332,13 @@ export default function App({ engine, config, provider, needsSetup }) {
     push({ kind: 'notice', text: 'jumped back — edit & send, or type a new message', level: 'ok' });
   }, [engine, push]);
 
+  // `/` autocomplete: which commands match what's being typed right now. Only
+  // active when idle (not approving / editing / picking / busy). Declared here —
+  // BEFORE the key handler — because useInput's Tab branch reads showCmdMenu.
+  const cmdMatches = (!pending && !editing && !picker && !rewind && !busy) ? matchCommands(input) : [];
+  const showCmdMenu = cmdMatches.length > 0;
+  const narrow = columns < 72; // compact the footer/hints on small terminals
+
   // --- Key handling: approval, edit, interrupt, tab, ctrl-c -----------------
   // Disabled while the setup wizard is open (it owns the keyboard).
   useInput((inputCh, key) => {
@@ -317,7 +357,23 @@ export default function App({ engine, config, provider, needsSetup }) {
       return;
     }
 
-    if (key.tab) { doToggleAuto(); return; }
+    // interactive /model picker owns the keyboard while open
+    if (picker) {
+      if (key.escape) { setPicker(null); return; }
+      if (key.upArrow) { setPicker((p) => ({ ...p, sel: (p.sel - 1 + p.models.length) % p.models.length })); return; }
+      if (key.downArrow) { setPicker((p) => ({ ...p, sel: (p.sel + 1) % p.models.length })); return; }
+      if (key.return) { const chosen = picker.models[picker.sel]; setPicker(null); doSetModel(chosen); return; }
+      return;
+    }
+
+    // Tab toggles auto-approve — UNLESS the `/` command menu is open, where Tab
+    // completes the highlighted command (handled in PromptInput). We recompute
+    // the menu state inline from `input` (not the captured showCmdMenu) so a
+    // stale closure can't let Tab BOTH toggle auto AND complete at once.
+    if (key.tab) {
+      if (matchCommands(input).length === 0) doToggleAuto();
+      return;
+    }
 
     if (key.escape) { handleEscape(); return; }
 
@@ -394,10 +450,13 @@ export default function App({ engine, config, provider, needsSetup }) {
   return (
     <Box flexDirection="column" paddingX={1}>
       {/* Everything settled is printed ONCE via <Static> — Ink writes it to the
-          terminal permanently and never redraws it. The banner+header ride along
-          as the first static items. This is what stops the whole-screen flicker:
-          only the small dynamic region below re-renders on keystrokes/spinner. */}
-      <Static items={[...(showBanner ? [{ _k: '__banner__' }] : []), ...settled]}>
+          terminal permanently and never redraws it. The banner is ALWAYS the
+          first static item and is NEVER removed: Ink's <Static> tracks how many
+          items it has emitted by COUNT, so dropping item 0 (the banner) mid-run
+          shifts every index and makes it skip the next appended item — that was
+          the "/help shows nothing the first time" bug. It just scrolls away as
+          the transcript grows, which is the behaviour we want anyway. */}
+      <Static items={[{ _k: '__banner__' }, ...settled]}>
         {(it) => (it._k === '__banner__' ? <Banner key="__banner__" /> : <TranscriptItem key={it._k} item={it} />)}
       </Static>
 
@@ -423,20 +482,28 @@ export default function App({ engine, config, provider, needsSetup }) {
           ))}
           <Text color={theme.faint}>  ↑↓ select · enter rewind here · esc cancel</Text>
         </Box>
+      ) : picker ? (
+        /* interactive /model picker: arrow-select a model, no typing the id */
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1} marginBottom={1}>
+          <Text color={theme.brand} bold>{glyphs.bullet} pick a model</Text>
+          {visiblePicker(picker, columns).map(({ id, i }) => (
+            <Text key={id} color={i === picker.sel ? theme.ok : theme.dim} bold={i === picker.sel}>
+              {i === picker.sel ? glyphs.bullet : ' '} {id === config.llm.model ? glyphs.check + ' ' : '  '}{clampText(id, columns - 8)}
+            </Text>
+          ))}
+          <Text color={theme.faint}>  ↑↓ select · enter switch · esc cancel  {picker.models.length > PICKER_WINDOW ? `(${picker.sel + 1}/${picker.models.length})` : ''}</Text>
+        </Box>
       ) : setupOpen ? (
         /* onboarding wizard takes over the input region when open */
         <Setup initial={config.llm} onDone={onSetupDone} onCancel={onSetupCancel} />
       ) : (
         <>
           {/* live indicators: a running command, OR the model thinking (not both).
-              Output itself streams into scrollback above as 'output' lines. */}
+              Output itself streams into scrollback above as 'output' lines. The
+              running indicator shows WHICH command is running + a "silent for Ns"
+              nudge, so a long/quiet command never looks like termita froze. */}
           {runningTool && (
-            <Box paddingLeft={2}>
-              <Spinner label="running" color={theme.brand} />
-              <Text color={theme.faint}> </Text>
-              {runningTool.startedAt ? <ElapsedInline since={runningTool.startedAt} /> : null}
-              <Text color={theme.faint}> · esc to stop</Text>
-            </Box>
+            <RunningIndicator tool={runningTool} lastOutputAt={lastOutputAt} width={columns} />
           )}
           {busy && !toolRunning && !stream && !pending && !editing && (
             <Box paddingLeft={2}>
@@ -455,6 +522,9 @@ export default function App({ engine, config, provider, needsSetup }) {
             </Box>
           )}
 
+          {/* `/` command autocomplete — floats above the input while typing */}
+          {showCmdMenu && <CommandMenu matches={cmdMatches} selected={cmdSel} width={columns} />}
+
           {/* input / edit prompt */}
           <Box
             borderStyle="round"
@@ -462,44 +532,64 @@ export default function App({ engine, config, provider, needsSetup }) {
             borderLeft={false}
             borderRight={false}
             paddingX={1}
+            flexDirection="row"
+            alignItems="flex-start"
           >
+            {/* Marker sits top-left in its own fixed-width column; the input is a
+                flex column beside it so multi-line text wraps cleanly BELOW the
+                first line instead of shoving the box border around. */}
             {editing ? (
               <>
-                <Text color={theme.warn}>{glyphs.bolt} edit </Text>
-                <TextInput value={editing.value} onChange={(v) => setEditing((e) => ({ ...e, value: v }))} onSubmit={submitEdit} />
+                <Box flexShrink={0}><Text color={theme.warn}>{glyphs.bolt} edit </Text></Box>
+                <Box flexGrow={1}>
+                  <TextInput value={editing.value} onChange={(v) => setEditing((e) => ({ ...e, value: v }))} onSubmit={submitEdit} />
+                </Box>
               </>
             ) : (
               <>
-                <Text color={pending ? theme.faint : theme.accent} bold>{glyphs.prompt} </Text>
-                <PromptInput
-                  value={input}
-                  onChange={setInput}
-                  onSubmit={submit}
-                  disabled={!!pending}
-                  history={inputHistory}
-                  histIdx={histIdx}
-                  setInput={setInput}
-                  onEscape={handleEscape}
-                />
+                <Box flexShrink={0}><Text color={pending ? theme.faint : theme.accent} bold>{glyphs.prompt} </Text></Box>
+                <Box flexGrow={1}>
+                  <PromptInput
+                    value={input}
+                    onChange={setInput}
+                    onSubmit={submit}
+                    disabled={!!pending}
+                    history={inputHistory}
+                    histIdx={histIdx}
+                    setInput={setInput}
+                    onEscape={handleEscape}
+                    cmdMatches={cmdMatches}
+                    cmdSel={cmdSel}
+                    setCmdSel={setCmdSel}
+                  />
+                </Box>
               </>
             )}
           </Box>
 
-          {/* footer: hint on the left, AUTO legend · tokens · model on the right.
-              No thinking spinner here — the term block above owns that, so we
-              don't double it. */}
-          <Box paddingLeft={1} justifyContent="space-between">
-            <Text color={theme.faint}>
-              {pending ? '↑↓ + enter · or R/E/A/N · esc cancels'
-                : toolRunning ? 'running… esc to stop'
-                : busy ? 'esc to interrupt'
-                : '/help · /setup · tab auto-approve · esc esc to jump back'}
-            </Text>
+          {/* hint line (its own row so it never collides with the brand/status
+              on narrow terminals). Hidden when the command menu is open. */}
+          {!showCmdMenu && (
+            <Box paddingLeft={1}>
+              <Text color={theme.faint}>
+                {pending ? '↑↓ + enter · or R/E/A/N · esc cancels'
+                  : toolRunning ? 'running… esc to stop'
+                  : busy ? 'esc to interrupt'
+                  : narrow ? '/help · tab auto'
+                  : '/help · /setup · tab auto-approve · esc esc to jump back'}
+              </Text>
+            </Box>
+          )}
+
+          {/* footer: mascot + version bottom-LEFT, status (auto · ctx · model)
+              on the right. Wraps to two rows automatically on narrow widths. */}
+          <Box paddingLeft={1} justifyContent="space-between" flexWrap="wrap">
+            <MascotTag version={VERSION} />
             <Text>
-              {autoApprove && <Text color={theme.warn} bold>AUTO {glyphs.bolt} (tab off) </Text>}
+              {autoApprove && <Text color={theme.warn} bold>AUTO {glyphs.bolt}{narrow ? '' : ' (tab off)'} </Text>}
               {reasoning && <Text color={theme.faint}>{glyphs.thought} think </Text>}
               <Text color={ctxColor}>ctx {fmtTokens(tokens)}/{fmtTokens(contextSize)} {ctxPct}% </Text>
-              <Text color={theme.brandDim}>{model}</Text>
+              <Text color={theme.brandDim}>{clampText(model, narrow ? 16 : 40)}</Text>
             </Text>
           </Box>
         </>
@@ -511,12 +601,34 @@ export default function App({ engine, config, provider, needsSetup }) {
 // Wraps TextInput to add ↑/↓ history AND handle Esc. The <TextInput> is focused
 // while typing, so the PARENT useInput never sees keys here — Esc and history
 // must be handled in THIS component or they're swallowed by the text field.
-function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, setInput, onEscape }) {
+function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, setInput, onEscape, cmdMatches = [], cmdSel = 0, setCmdSel }) {
+  const menuOpen = cmdMatches.length > 0;
+  const highlighted = () => cmdMatches[cmdSel] || cmdMatches[0];
+  const complete = (cmd) => setInput('/' + cmd.name + ' '); // fill the command, leave room for args
+
   useInput((ch, key) => {
     // Esc must work even while "disabled" (a command is running) — that's the
     // whole point: interrupt the running command / streaming turn.
-    if (key.escape) { onEscape?.(); return; }
+    if (key.escape) {
+      // Esc with the command menu open just closes the menu (clears the `/`).
+      if (menuOpen) { setInput(''); setCmdSel?.(0); return; }
+      onEscape?.();
+      return;
+    }
     if (disabled) return;
+
+    // `/` autocomplete dropdown owns ↑↓ + Tab + Enter while it's showing.
+    if (menuOpen) {
+      if (key.upArrow) { setCmdSel?.((s) => (s - 1 + cmdMatches.length) % cmdMatches.length); return; }
+      if (key.downArrow) { setCmdSel?.((s) => (s + 1) % cmdMatches.length); return; }
+      // Tab = COMPLETE into the input (so you can add args, e.g. /maxtokens 8192).
+      if (key.tab) { complete(highlighted()); return; }
+      // Enter = RUN the highlighted command immediately. We submit the explicit
+      // `/name` string (not `value`) so it never depends on stale input state —
+      // this is what makes one Enter actually fire /help, /clear, etc.
+      if (key.return) { onSubmit('/' + highlighted().name); return; }
+    }
+
     // Newline-without-submit. Three ways, by terminal capability:
     //  - Shift+Enter / Alt+Enter: works only in terminals that report the
     //    modifier (iTerm, kitty, Windows Terminal). Konsole/xterm do NOT —
@@ -541,6 +653,11 @@ function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, se
 
   // Trailing backslash = line continuation (portable fallback for shift+enter).
   const handleSubmit = (v) => {
+    // When the `/` menu is open, Enter is OWNED by the useInput handler above
+    // (it runs the highlighted command). <TextInput> also fires onSubmit on the
+    // same keypress — swallow it here so the command doesn't run twice / with a
+    // stale value. This is what fixed "double-enter does nothing / menu sticks".
+    if (menuOpen) return;
     if (v.endsWith('\\')) { onChange(v.slice(0, -1) + '\n'); return; }
     onSubmit(v);
   };
@@ -564,6 +681,26 @@ function fmtTokens(n) {
   return String(n);
 }
 
+// Clamp a string to `max` cols with an ellipsis (keeps long model ids / hints
+// from overflowing a narrow terminal).
+function clampText(s, max) {
+  if (!s || max == null || max < 2) return s || '';
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+// How many model rows the picker shows at once (scrolls a window for long lists).
+const PICKER_WINDOW = 8;
+
+// Windowed slice of the model list centred on the selection, with original
+// indices preserved so highlighting still maps to picker.sel.
+function visiblePicker(picker, columns) { // eslint-disable-line no-unused-vars
+  const { models, sel } = picker;
+  if (models.length <= PICKER_WINDOW) return models.map((id, i) => ({ id, i }));
+  let start = Math.max(0, sel - Math.floor(PICKER_WINDOW / 2));
+  start = Math.min(start, models.length - PICKER_WINDOW);
+  return models.slice(start, start + PICKER_WINDOW).map((id, k) => ({ id, i: start + k }));
+}
+
 // Small ticking elapsed timer for the busy/thinking indicator.
 function ElapsedInline({ since }) {
   const [now, setNow] = useState(Date.now());
@@ -572,6 +709,38 @@ function ElapsedInline({ since }) {
     return () => clearInterval(id);
   }, []);
   return <Text color={theme.faint}>{((now - since) / 1000).toFixed(1)}s</Text>;
+}
+
+// Live "what's running right now" block. Shows the actual command (so it's
+// obviously alive, not frozen), elapsed time, and — if no output has arrived
+// for a while — a "silent for Ns" nudge so a quiet long command reads as BUSY,
+// not HUNG. Ticks on its own so the silent timer updates without engine events.
+function RunningIndicator({ tool, lastOutputAt, width }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, []);
+  const cmd = tool.name === 'shell' ? tool.args?.command
+    : tool.name === 'write' ? `write ${tool.args?.path}`
+    : (tool.args?.path || tool.args?.pattern || tool.name);
+  const oneLine = String(cmd || tool.name).replace(/\s+/g, ' ').trim();
+  const silentMs = lastOutputAt ? now - lastOutputAt : 0;
+  const silent = silentMs > 3000; // no new output for >3s → show a reassurance
+  return (
+    <Box flexDirection="column" paddingLeft={2}>
+      <Box>
+        <Spinner label="running" color={theme.brand} />
+        <Text color={theme.faint}> </Text>
+        {tool.startedAt ? <ElapsedInline since={tool.startedAt} /> : null}
+        <Text color={theme.faint}> · esc to stop</Text>
+      </Box>
+      <Text color={theme.brandDim} wrap="truncate-end">  {glyphs.run} {clampText(oneLine, Math.max(20, (width || 80) - 6))}</Text>
+      {silent && (
+        <Text color={theme.faint} italic>  …no output for {Math.round(silentMs / 1000)}s — still working, esc to stop</Text>
+      )}
+    </Box>
+  );
 }
 
 function TranscriptItem({ item }) {

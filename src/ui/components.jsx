@@ -203,6 +203,44 @@ export function ApprovalMenu({ selected, danger }) {
   );
 }
 
+// --- Slash-command autocomplete dropdown ------------------------------------
+// Shown above the input while the user is typing a `/command`. Arrow-navigable;
+// Tab/Enter completes the highlighted one. `selected` is the highlighted index.
+export function CommandMenu({ matches, selected, width }) {
+  if (!matches.length) return null;
+  // pad the usage column to align descriptions; clamp to terminal width
+  const usageW = Math.min(22, Math.max(...matches.map((m) => m.usage.length)) + 2);
+  return (
+    <Box flexDirection="column" paddingLeft={2} marginBottom={1}>
+      <Box flexDirection="column" borderStyle="round" borderColor={theme.border} paddingX={1}>
+        {matches.map((m, i) => {
+          const active = i === selected;
+          const line = `${m.usage.padEnd(usageW)}${m.desc}`;
+          const clamped = width && line.length > width - 8 ? line.slice(0, width - 9) + '…' : line;
+          return (
+            <Text key={m.name} color={active ? theme.accent : theme.dim} bold={active}>
+              {active ? glyphs.bullet : ' '} {clamped}
+            </Text>
+          );
+        })}
+        <Text color={theme.faint}>  {glyphs.dot} ↑↓ move · tab/enter complete · esc cancel</Text>
+      </Box>
+    </Box>
+  );
+}
+
+// --- Termita mascot + version (bottom-left footer brand) ---------------------
+// Tiny termite glyph; sits at the bottom-left corner with the current version.
+export function MascotTag({ version }) {
+  return (
+    <Box>
+      <Text color={theme.brand}>{glyphs.termite}</Text>
+      <Text color={theme.brandDim} bold> termita</Text>
+      <Text color={theme.faint}> v{version}</Text>
+    </Box>
+  );
+}
+
 // --- Inline notices / errors ------------------------------------------------
 export function Notice({ text, level }) {
   const color =
