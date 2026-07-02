@@ -228,13 +228,25 @@ dangerous patterns, which always prompt with a red warning. File writes auto-run
 | `/clean`             | wipe transcript + history (fresh context)       |
 | `/compact`           | summarize history into a note, free context     |
 | `/allow`             | list allowlist rules                            |
+| `/websearch [key]`   | set/show Brave web-search key (`off` to clear)  |
 | `/quit`              | exit (also Ctrl-C twice)                         |
+
+### Web search
+
+Give the model live web access with a [Brave Search API](https://api-dashboard.search.brave.com)
+key: `/websearch <key>` (or set `BRAVE_API_KEY`). Once a key is set, the model
+calls a read-only `websearch` tool on its own whenever an answer needs current
+info — latest versions, release dates, recent events, unfamiliar errors — and
+cites the URLs it used. Without a key the tool stays hidden from the model.
 
 ### Scrolling output
 
-termita prints to normal terminal lines — scroll with your terminal's own
-scrollback (mouse wheel / trackpad / `Shift+PgUp`). Long command output streams
-live and stays in your history.
+termita runs in the alternate screen (no resize ghosting), so it draws its own
+scrollable transcript. Scroll with the **mouse wheel**, `PageUp`/`PageDown`,
+`Ctrl+↑`/`Ctrl+↓`, `Home` (top) / `End` (latest). New output auto-follows the
+bottom until you scroll up. To **select/copy** text, hold a modifier while
+dragging — **Option** on macOS (iTerm2/Terminal.app), **Shift** on most Linux
+terminals — which bypasses mouse capture for a native selection.
 
 ---
 

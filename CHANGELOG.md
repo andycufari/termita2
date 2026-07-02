@@ -5,6 +5,45 @@ All notable changes to **termita** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] — 2026-07-02
+
+### Added
+- **Web search (Brave)** — a `websearch` tool the model calls on its own when an
+  answer depends on current or external info (latest versions, release dates,
+  recent events, unfamiliar errors, changing docs). Read-only, so it auto-runs
+  without approval like `read`/`grep`; results come back as titles · URLs ·
+  snippets plus Brave's instant answer, and the model is prompted to cite the
+  URLs it used. The tool is **hidden from the model until a key is set**, so it
+  can never fail a search for a missing key.
+- **`/websearch` command** — set/show/clear the Brave API key
+  (`/websearch <key>`, `/websearch` for status, `/websearch off` to clear). Key
+  is stored in `config.json` under `search.braveApiKey`, with a `BRAVE_API_KEY`
+  environment-variable fallback. Aliases: `/brave`, `/search`.
+- **Mouse-wheel scrolling** — the wheel now scrolls the in-app transcript. Since
+  the alternate screen has no native scrollback, mouse reporting is enabled and
+  wheel events are intercepted at Ink's `stdin.read()` (the path Ink 7 actually
+  uses) and stripped before they reach the input — so wheel/click codes never
+  leak into the prompt box.
+- **`Ctrl+↑` / `Ctrl+↓` scrolling** — a keyboard fallback for scrolling the
+  transcript, alongside the existing `PageUp`/`PageDown`/`Home`/`End`.
+- **Markdown rendering** — the model's replies are now rendered from Markdown
+  instead of shown raw: bordered/aligned **tables**, **bold**/*italic*/`code`/
+  ~~strike~~/links, headings, bullet & numbered lists, blockquotes, fenced code
+  blocks, and horizontal rules — themed to the neon palette. Streaming stays
+  plain text until a reply completes, so you never see a half-drawn table.
+
+### Fixed
+- **Esc now reliably interrupts a running command / stream.** A stale-closure
+  bug meant the Esc handler often read `busy` as `false` and fell through to the
+  double-Esc *rewind* path instead of aborting. Esc state is now read through
+  live refs, and a lone-Esc byte is also caught directly off stdin as a safety
+  net for when Ink defers Esc to disambiguate escape sequences.
+
+### Notes
+- **Copying text:** in the alternate screen with mouse reporting on, use a
+  modifier while dragging to select natively — **Option+drag** on macOS
+  (iTerm2/Terminal.app), **Shift+drag** on most Linux terminals.
+
 ## [2.5.0] — 2026-06-26
 
 ### Fixed

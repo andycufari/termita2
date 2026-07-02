@@ -1,5 +1,13 @@
 // Slash command handling. Pure-ish: takes the command + a bag of UI callbacks.
 import { glyphs } from './ui/theme.js';
+import { saveConfig } from './config/config.js';
+
+// Mask a secret for display: keep the first 4 + last 4 chars.
+function maskKey(k) {
+  if (!k) return '';
+  if (k.length <= 10) return k[0] + '…' + k.slice(-1);
+  return `${k.slice(0, 4)}…${k.slice(-4)}`;
+}
 
 export async function runSlash(line, ctx) {
   const [cmd, ...rest] = line.slice(1).trim().split(/\s+/);
@@ -75,8 +83,30 @@ export async function runSlash(line, ctx) {
       return;
     }
 
-    case 'compact': {
-      await compact(ctx);
+    case 'websearch':
+    case 'brave':
+    case 'search': {
+      // /websearch            → show status
+      // /websearch <key>      → set + persist the Brave API key
+      // /websearch off|clear  → remove the key (hides the tool again)
+      config.search = config.search || { braveApiKey: '', enabled: true };
+      if (!arg) {
+        const cfgKey = config.search.braveApiKey;
+        const envKey = !cfgKey && process.env.BRAVE_API_KEY;
+        if (cfgKey) push({ kind: 'notice', text: `web search ON — Brave key ${maskKey(cfgKey)} (set)`, level: 'ok' });
+        else if (envKey) push({ kind: 'notice', text: `web search ON — using BRAVE_API_KEY env var`, level: 'ok' });
+        else push({ kind: 'notice', text: 'web search OFF — set a key: /websearch <brave-api-key>  ·  get one at api-dashboard.search.brave.com', level: 'dim' });
+        return;
+      }
+      if (/^(off|clear|none|remove)$/i.test(arg)) {
+        config.search.braveApiKey = '';
+        saveConfig(config);
+        push({ kind: 'notice', text: 'Brave key cleared — web search disabled (env var still applies if set)', level: 'warn' });
+        return;
+      }
+      config.search.braveApiKey = arg;
+      saveConfig(config);
+      push({ kind: 'notice', text: `Brave key saved ${maskKey(arg)} — web search enabled ${glyphs.check}`, level: 'ok' });
       return;
     }
 

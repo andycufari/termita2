@@ -1,6 +1,26 @@
 // Tool registry + OpenAI-style JSON schemas sent to the model.
 import { runShell } from './shell.js';
 import { readFile, writeFile, grepFiles } from './fs.js';
+import { webSearch } from './websearch.js';
+
+// The websearch schema is added CONDITIONALLY (only when a Brave key is set) so
+// the model never sees a tool it can't use. See toolSchemas() below.
+const WEBSEARCH_SCHEMA = {
+  type: 'function',
+  function: {
+    name: 'websearch',
+    description:
+      'Search the live web via Brave and get back titles, URLs and snippets. Read-only, runs without approval. Use for current events, docs, versions, error messages, or anything outside your training data. Prefer a focused query; cite the URLs you rely on.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'the search query' },
+        count: { type: 'integer', description: 'how many results (1-20, default 8)' },
+      },
+      required: ['query'],
+    },
+  },
+};
 
 export const TOOL_SCHEMAS = [
   {
@@ -71,9 +91,27 @@ export const TOOL_SCHEMAS = [
   },
 ];
 
-export const READ_ONLY_TOOLS = new Set(['read', 'grep']);
+export const READ_ONLY_TOOLS = new Set(['read', 'grep', 'websearch']);
 export const MUTATING_TOOLS = new Set(['shell', 'write']);
-export const KNOWN_TOOLS = new Set(['shell', 'read', 'grep', 'write']);
+export const KNOWN_TOOLS = new Set(['shell', 'read', 'grep', 'write', 'websearch']);
+
+// Resolve the Brave API key: config.search.braveApiKey wins, else BRAVE_API_KEY
+// env var. Returns '' when neither is set (→ websearch stays hidden).
+export function braveKey(config) {
+  const fromCfg = config?.search?.braveApiKey;
+  if (fromCfg && String(fromCfg).trim()) return String(fromCfg).trim();
+  const fromEnv = process.env.BRAVE_API_KEY;
+  return fromEnv && fromEnv.trim() ? fromEnv.trim() : '';
+}
+
+// The tool schemas advertised to the model, tailored to what's actually usable.
+// websearch is included only when a Brave key exists — the model can't call a
+// tool it never sees, so it never fails a search for a missing key.
+export function toolSchemas(config) {
+  const schemas = [...TOOL_SCHEMAS];
+  if (braveKey(config)) schemas.push(WEBSEARCH_SCHEMA);
+  return schemas;
+}
 
 // Cap on output fed back to the model (the UI still sees the full stream).
 export const MODEL_OUTPUT_LIMIT = 12 * 1024; // ~12KB
@@ -100,6 +138,8 @@ export async function executeTool(toolName, args, ctx = {}) {
       return grepFiles(args.pattern, args.path, { ignoreCase: args.ignoreCase, ...ctx });
     case 'write':
       return writeFile(args.path, args.content, ctx);
+    case 'websearch':
+      return webSearch(args.query, { count: args.count, braveApiKey: ctx.braveApiKey, signal: ctx.signal });
     default:
       return { output: `error: unknown tool "${toolName}"`, meta: { error: true } };
   }

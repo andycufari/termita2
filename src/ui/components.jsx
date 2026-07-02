@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Text } from 'ink';
 import { theme, box, glyphs } from './theme.js';
+import { Markdown } from './markdown.jsx';
 
 // --- Spinner ----------------------------------------------------------------
 export function Spinner({ label, color = theme.brand }) {
@@ -34,7 +35,7 @@ function RoleTag({ who }) {
   );
 }
 
-export function Message({ who, text, reasoning, thoughtMs }) {
+export function Message({ who, text, reasoning, thoughtMs, width }) {
   const color = who === 'you' ? theme.user : theme.text;
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -45,7 +46,12 @@ export function Message({ who, text, reasoning, thoughtMs }) {
         </Text>
       )}
       <Box paddingLeft={2}>
-        <Text color={color} wrap="wrap">{text}</Text>
+        {/* The user types plain text; the model emits Markdown (tables, bold,
+            code, lists) — render its replies through the Markdown component so
+            they don't show as raw pipes/asterisks. */}
+        {who === 'you'
+          ? <Text color={color} wrap="wrap">{text}</Text>
+          : <Markdown text={text} width={(width || 80) - 2} />}
       </Box>
     </Box>
   );
@@ -76,13 +82,16 @@ export function StreamingMessage({ text, thinking, startedAt }) {
 }
 
 // --- Tool card --------------------------------------------------------------
-const TOOL_ICON = { shell: '$', write: glyphs.bolt, read: '📖', grep: '🔍' };
+const TOOL_ICON = { shell: '$', write: glyphs.bolt, read: '📖', grep: '🔍', websearch: '🌐' };
 
 export function ToolCard({ name, args, danger, status, awaiting }) {
   const isDanger = !!danger;
   const borderColor = isDanger ? theme.danger : status === 'done' ? theme.borderDim : theme.border;
   const title = name;
-  const cmd = name === 'shell' ? args.command : name === 'write' ? args.path : (args.path || args.pattern);
+  const cmd = name === 'shell' ? args.command
+    : name === 'write' ? args.path
+    : name === 'websearch' ? args.query
+    : (args.path || args.pattern);
   const why = args.why;
 
   return (

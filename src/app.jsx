@@ -15,6 +15,7 @@ import { saveConfig } from './config/config.js';
 import { runSlash } from './slash.js';
 import Setup from './ui/setup.jsx';
 import { useTerminalSize } from './ui/use-terminal-size.js';
+import { useMouseWheel } from './ui/use-mouse-wheel.js';
 import { matchCommands } from './ui/commands.js';
 import { VERSION } from './cli.js';
 
@@ -51,18 +52,57 @@ export default function App({ engine, config, provider, needsSetup }) {
   // (auto-follows new output). PageUp/PageDown adjust it (see useInput).
   const [scrollUp, setScrollUp] = useState(0);
 
+  // Step the scroll by N items (clamped): +up = older, -down = latest. Shared by
+  // the mouse wheel, PgUp/PgDn and Ctrl+↑/↓ so all three stay consistent.
+  const scrollBy = useCallback((step) => {
+    setScrollUp((s) => Math.max(0, Math.min(itemsRef.current.length, s + step)));
+  }, []);
+
   const inputHistory = useRef([]);
   const histIdx = useRef(-1);
   const ctrlC = useRef(0);
   const lastEsc = useRef(0); // timestamp of last Esc, for double-Esc detection
   const outputBuffers = useRef({}); // id -> accumulated live output
   const queueRef = useRef([]); // mirror of `queue` for the engine event closure
+  const itemsRef = useRef([]); // mirror of `items` for the wheel-scroll closure
+  // Live mirrors of the "is something running?" state. handleEscape is captured
+  // by PromptInput's useInput once and NOT re-subscribed when the callback's deps
+  // change, so reading busy/stream/pending directly would be STALE (usually
+  // false) — Esc would fall through to the rewind path instead of interrupting.
+  // Refs are always current, so Esc reliably aborts a running command. (see #esc)
+  const busyRef = useRef(false);
+  const streamRef = useRef(null);
+  const pendingRef = useRef(null);
+  const rewindRef = useRef(null);
+  const setupRef = useRef(false);
   const [lastOutputAt, setLastOutputAt] = useState(null); // ts of last live output line
 
   const push = useCallback((item) => setItems((cur) => [...cur, { _k: uid(), ...item }]), []);
 
   // keep queueRef in sync so the engine event closure can read the latest queue
   useEffect(() => { queueRef.current = queue; }, [queue]);
+
+  // keep itemsRef in sync so the wheel-scroll callback can clamp without
+  // re-subscribing stdin on every transcript change
+  useEffect(() => { itemsRef.current = items; }, [items]);
+
+  // keep the "running?" mirrors current for the stable handleEscape (see refs above)
+  useEffect(() => { busyRef.current = busy; }, [busy]);
+  useEffect(() => { streamRef.current = stream; }, [stream]);
+  useEffect(() => { pendingRef.current = pending; }, [pending]);
+  useEffect(() => { rewindRef.current = rewind; }, [rewind]);
+  useEffect(() => { setupRef.current = setupOpen; }, [setupOpen]);
+
+  // mouse wheel → scroll the in-app transcript; lone Esc → interrupt (safety net
+  // for when Ink's parser holds Esc back, see use-mouse-wheel.js). Esc goes
+  // through a ref because handleEscape is defined below; the ref is always the
+  // latest version. One wheel tick = 3 items so a flick moves a chunk (matches
+  // PgUp/PgDn). Alt-screen has no native scrollback, so this makes the wheel work.
+  const handleEscapeRef = useRef(() => {});
+  useMouseWheel(
+    useCallback((delta) => scrollBy(delta * 3), [scrollBy]),
+    useCallback(() => handleEscapeRef.current(), []),
+  );
 
   // reset the autocomplete highlight whenever the typed command changes
   useEffect(() => { setCmdSel(0); }, [input]);
@@ -295,14 +335,21 @@ export default function App({ engine, config, provider, needsSetup }) {
   }, [config, push]);
 
   // --- Escape: interrupt if busy, else double-Esc opens rewind ---------------
+  // Reads state through REFS, not captured values: this callback is captured by
+  // PromptInput's useInput at mount and never re-subscribed, so closing over
+  // `busy`/`stream`/`pending` directly would read stale (false) and Esc would
+  // fail to interrupt a running command. Deps are stable ([engine, push]) so the
+  // identity never churns either. (#esc)
   const handleEscape = useCallback(() => {
-    if (setupOpen) return;
-    if (rewind) { setRewind(null); return; } // esc out of rewind mode
+    if (setupRef.current) return;
+    if (rewindRef.current) { setRewind(null); return; } // esc out of rewind mode
 
     // Single Esc while busy / streaming / a tool is running -> interrupt now.
-    if (busy || stream || pending) {
+    if (busyRef.current || streamRef.current || pendingRef.current) {
       engine.interrupt();
       setStatus(null);
+      setStream(null);
+      setPending(null);
       setBusy(false);
       setBusyAt(null);
       lastEsc.current = 0;
@@ -323,7 +370,10 @@ export default function App({ engine, config, provider, needsSetup }) {
       setStatus('esc again to jump back');
       setTimeout(() => { setStatus((s) => (s === 'esc again to jump back' ? null : s)); }, 700);
     }
-  }, [setupOpen, rewind, busy, stream, pending, engine, push]);
+  }, [engine, push]);
+
+  // keep the mouse-hook's Esc safety net pointed at the latest handleEscape
+  useEffect(() => { handleEscapeRef.current = handleEscape; }, [handleEscape]);
 
   // Apply a rewind: truncate engine history + transcript to before the chosen msg.
   const applyRewind = useCallback((point) => {
@@ -363,8 +413,12 @@ export default function App({ engine, config, provider, needsSetup }) {
     // state so you can scroll while busy/streaming. PgUp/PgDn step by ~a page;
     // Home jumps to the top, End/PgDn-to-0 returns to the latest. `scrollUp` is
     // clamped to the item count in render; stepping past the end pins to bottom.
-    if (key.pageUp) { setScrollUp((s) => Math.min(items.length, s + 5)); return; }
-    if (key.pageDown) { setScrollUp((s) => Math.max(0, s - 5)); return; }
+    if (key.pageUp) { scrollBy(5); return; }
+    if (key.pageDown) { scrollBy(-5); return; }
+    // Ctrl+↑ / Ctrl+↓ scroll too — a fallback for keyboards/layouts where PgUp/
+    // PgDn need Fn or are grabbed by the terminal (e.g. some Konsole profiles).
+    if (key.ctrl && key.upArrow) { scrollBy(3); return; }
+    if (key.ctrl && key.downArrow) { scrollBy(-3); return; }
     if (key.home && items.length) { setScrollUp(items.length); return; }
     if (key.end) { setScrollUp(0); return; }
 
@@ -482,7 +536,7 @@ export default function App({ engine, config, provider, needsSetup }) {
         <Box flexDirection="column" flexShrink={0}>
           <Banner />
           {shownItems.map((it) => (
-            <TranscriptItem key={it._k} item={it} />
+            <TranscriptItem key={it._k} item={it} width={columns} />
           ))}
           {/* live streaming assistant rides at the bottom of the transcript */}
           {atBottom && stream && <StreamingMessage text={stream.text} thinking={stream.thinking && !stream.text} startedAt={stream.startedAt} />}
@@ -497,7 +551,7 @@ export default function App({ engine, config, provider, needsSetup }) {
       {/* scroll indicator when not pinned to the bottom */}
       {!atBottom && (
         <Box paddingLeft={1}>
-          <Text color={theme.faint}>↑ scrolled up {scrollUp} · PgDn / End to return to latest</Text>
+          <Text color={theme.faint}>↑ scrolled up {scrollUp} · wheel / PgDn / ctrl+↓ / End to return to latest</Text>
         </Box>
       )}
 
@@ -757,6 +811,7 @@ function RunningIndicator({ tool, lastOutputAt, width }) {
   }, []);
   const cmd = tool.name === 'shell' ? tool.args?.command
     : tool.name === 'write' ? `write ${tool.args?.path}`
+    : tool.name === 'websearch' ? `search: ${tool.args?.query}`
     : (tool.args?.path || tool.args?.pattern || tool.name);
   const oneLine = String(cmd || tool.name).replace(/\s+/g, ' ').trim();
   const silentMs = lastOutputAt ? now - lastOutputAt : 0;
@@ -777,10 +832,10 @@ function RunningIndicator({ tool, lastOutputAt, width }) {
   );
 }
 
-function TranscriptItem({ item }) {
+function TranscriptItem({ item, width }) {
   switch (item.kind) {
     case 'msg':
-      return <Message who={item.who} text={item.text} reasoning={item.reasoning} thoughtMs={item.thoughtMs} />;
+      return <Message who={item.who} text={item.text} reasoning={item.reasoning} thoughtMs={item.thoughtMs} width={width} />;
     case 'tool':
       // just the proposal card; output streams below as separate 'output' items
       return <ToolCard name={item.name} args={item.args} danger={item.danger} status={item.status} />;

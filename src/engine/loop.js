@@ -3,11 +3,12 @@
 // model can react — then returns control to the user. No UI imports.
 import { Emitter, EVENTS } from './events.js';
 import {
-  TOOL_SCHEMAS,
   READ_ONLY_TOOLS,
   KNOWN_TOOLS,
   executeTool,
   clampForModel,
+  toolSchemas,
+  braveKey,
 } from '../tools/index.js';
 import { shellState } from '../tools/shell.js';
 import { createProvider } from '../providers/index.js';
@@ -99,6 +100,7 @@ export class Engine {
       cwd: shellState.cwd,
       signal: this.abort?.signal,
       onChunk: (chunk) => this.events.emit(EVENTS.TOOL_OUTPUT, { id, chunk }),
+      braveApiKey: braveKey(this.gate?.config), // for the websearch tool
     };
 
     if (name === 'shell') this.log.command(args.command, args.why);
@@ -154,7 +156,7 @@ export class Engine {
       const resp = await this.provider.streamComplete({
         system: this.systemPrompt,
         messages: this.history,
-        tools: TOOL_SCHEMAS,
+        tools: toolSchemas(this.gate?.config), // websearch appears only if a Brave key is set
         signal: this.abort.signal,
         onToken: (t) => {
           textBuf += t;

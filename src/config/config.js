@@ -24,6 +24,9 @@ export const DEFAULT_CONFIG = {
   },
   ui: { theme: 'neon' },
   policy: { allowlist: [], autoRunReadOnly: true, autoApprove: false },
+  // Web search (Brave). Empty key → the websearch tool stays hidden from the
+  // model. Set via `/websearch <key>` or the BRAVE_API_KEY env var.
+  search: { braveApiKey: '', enabled: true },
 };
 
 function deepMerge(base, over) {

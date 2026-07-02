@@ -12,6 +12,7 @@ export const COMMANDS = [
   { name: 'auto',      usage: '/auto',              desc: 'toggle auto-approve (or TAB)', aliases: [] },
   { name: 'clear',     usage: '/clear',             desc: 'wipe transcript + history', aliases: ['clean'] },
   { name: 'compact',   usage: '/compact',           desc: 'summarize history, free context', aliases: [] },
+  { name: 'websearch', usage: '/websearch [key]',    desc: 'set/show Brave web-search key', aliases: ['brave', 'search'] },
   { name: 'allow',     usage: '/allow',             desc: 'list allowlist rules', aliases: ['allowlist'] },
   { name: 'quit',      usage: '/quit',              desc: 'exit (or ctrl-c twice)', aliases: ['q', 'exit'] },
 ];
