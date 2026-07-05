@@ -23,14 +23,46 @@ export function Header({ model, endpoint, autoApprove, reasoning }) {
   );
 }
 
-export function Banner() {
-  // small neon wordmark shown once at startup
+// Block-letter TERMITA wordmark (each line padded to equal width so the neon
+// fill is a clean rectangle). Shown big on first run; compact otherwise.
+const TERMITA_ART = [
+  '████████ ███████ ██████  ███    ███ ██ ████████  █████  ',
+  '   ██    ██      ██   ██ ████  ████ ██    ██    ██   ██  ',
+  '   ██    █████   ██████  ██ ████ ██ ██    ██    ███████  ',
+  '   ██    ██      ██   ██ ██  ██  ██ ██    ██    ██   ██  ',
+  '   ██    ███████ ██   ██ ██      ██ ██    ██    ██   ██  ',
+];
+
+// Big ASCII-art splash — first run (or a wide enough terminal). Includes the
+// version so it's obvious which build is running.
+function BigBanner({ version }) {
+  return (
+    <Box flexDirection="column" marginBottom={1} paddingX={1}>
+      {TERMITA_ART.map((row, i) => (
+        <Text key={i} color={theme.brand} bold>{row}</Text>
+      ))}
+      <Box marginTop={1}>
+        <Text>
+          <Text color={theme.accent} bold>{glyphs.termite} terminal copilot</Text>
+          <Text color={theme.dim}>  ·  v{version}</Text>
+          <Text color={theme.dim}>  ·  ride shotgun</Text>
+        </Text>
+      </Box>
+      <Text color={theme.dim}>one command at a time. you drive, it rides.</Text>
+      <Text color={theme.faint}>/help for commands · tab = auto-approve · esc = interrupt</Text>
+    </Box>
+  );
+}
+
+// Compact neon wordmark for subsequent renders / narrow terminals.
+function CompactBanner({ version }) {
   return (
     <Box flexDirection="column" marginBottom={1} paddingX={1}>
       <Text color={theme.brand} bold>{'  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄'}</Text>
       <Text>
         <Text color={theme.accent} bold>  ▌ </Text>
         <Text color={theme.brand} bold>termita</Text>
+        {version ? <Text color={theme.faint}> v{version}</Text> : null}
         <Text color={theme.dim}> · ride shotgun</Text>
         <Text color={theme.accent} bold> ▐</Text>
       </Text>
@@ -39,6 +71,15 @@ export function Banner() {
       <Text color={theme.faint}>  /help for commands · tab = auto-approve · esc = interrupt</Text>
     </Box>
   );
+}
+
+// `firstRun` (or a terminal wide enough for the art) → big splash with version.
+// Otherwise the compact wordmark. `columns` avoids wrapping the art on small
+// terminals, which would look broken.
+export function Banner({ version, firstRun = false, columns = 80 }) {
+  const wideEnough = columns >= 58; // art is ~56 cols; leave a little margin
+  if (firstRun && wideEnough) return <BigBanner version={version} />;
+  return <CompactBanner version={version} />;
 }
 
 export function HelpPanel() {

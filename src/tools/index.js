@@ -113,17 +113,24 @@ export function toolSchemas(config) {
   return schemas;
 }
 
-// Cap on output fed back to the model (the UI still sees the full stream).
+// Cap on output fed back to the model (the full stream is on disk — see
+// shell.js / log.js — and the UI streams it live).
 export const MODEL_OUTPUT_LIMIT = 12 * 1024; // ~12KB
 
-// Trim huge output head+tail so it doesn't blow the context window.
-export function clampForModel(text, limit = MODEL_OUTPUT_LIMIT) {
+// Trim huge output to a head+tail so it doesn't blow the context window. When
+// `fullPath` is given, the omission marker tells the model where the complete
+// output lives so it can grep/read the part that was cut. Shell output is
+// usually pre-bounded by shell.js (already carries this marker), so this only
+// re-trims the rare case where even the bounded head+tail exceeds the limit, and
+// non-shell tools (read/grep) whose raw output is large.
+export function clampForModel(text, limit = MODEL_OUTPUT_LIMIT, fullPath = null) {
   if (!text || text.length <= limit) return text;
   const half = Math.floor(limit / 2);
   const head = text.slice(0, half);
   const tail = text.slice(-half);
   const omitted = text.length - limit;
-  return `${head}\n\n… [${omitted} bytes omitted] …\n\n${tail}`;
+  const where = fullPath ? ` — full output at ${fullPath} (grep or read it to see the rest)` : '';
+  return `${head}\n\n… [${omitted} bytes omitted${where}] …\n\n${tail}`;
 }
 
 // Execute a tool. `ctx` carries cwd state + an onChunk(streamText) callback for

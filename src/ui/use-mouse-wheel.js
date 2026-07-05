@@ -75,6 +75,11 @@ export function useMouseWheel(onWheel, onEscape) {
         // stash an incomplete trailing report for next time
         const tail = str.match(MOUSE_TAIL_RE);
         if (tail) { carry = tail[0]; str = str.slice(0, -tail[0].length); }
+        // Safety valve: a well-formed SGR report is short (~a dozen bytes). If the
+        // "incomplete" carry ever grows past this, it's not a real split report
+        // (garbage/binary paste, a terminal that never terminates the sequence) —
+        // drop it so it can't accumulate and get re-scanned on every read.
+        if (carry.length > 64) carry = '';
         if (!str) continue;
 
         // lone Esc → interrupt (and still hand it to Ink so focus/esc works)

@@ -76,6 +76,12 @@ export class Engine {
     this.history = [];
   }
 
+  // Release session resources (per-command output files). Best-effort; safe to
+  // call more than once. Invoked on app exit — see cli.js.
+  dispose() {
+    try { this.log.cleanup(); } catch { /* best-effort */ }
+  }
+
   // Replace history with a compact summary message.
   setSummary(summaryText) {
     this.history = [
@@ -96,10 +102,15 @@ export class Engine {
     const { id, name, arguments: args } = toolCall;
     this.events.emit(EVENTS.TOOL_RUNNING, { id });
 
+    // Full shell output streams to a per-command file so the in-memory copy can
+    // stay bounded (see shell.js). onFull returns the path so shell can cite it
+    // in the clamped result; we resolve the path lazily on first chunk.
+    const outFile = name === 'shell' ? this.log.outFilePath(id) : null;
     const ctx = {
       cwd: shellState.cwd,
       signal: this.abort?.signal,
       onChunk: (chunk) => this.events.emit(EVENTS.TOOL_OUTPUT, { id, chunk }),
+      onFull: outFile ? (chunk) => { this.log.appendOutput(outFile, chunk); return outFile; } : null,
       braveApiKey: braveKey(this.gate?.config), // for the websearch tool
     };
 
@@ -230,7 +241,9 @@ export class Engine {
 
       // Execute.
       const result = await this._runTool(decision.toolCall);
-      const forModel = clampForModel(result.output);
+      // Shell output is pre-bounded (head+tail) with its full copy on disk; pass
+      // the file path so any further clamp still points the model at the full log.
+      const forModel = clampForModel(result.output, undefined, result.meta?.fullPath);
       this.events.emit(EVENTS.TOOL_DONE, {
         id: decision.toolCall.id,
         output: result.output,

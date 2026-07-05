@@ -8,7 +8,7 @@
 // and inline **bold** / *italic* / `code` / ~~strike~~ / [links](url).
 // Anything it doesn't recognize falls through as plain text, so it never eats
 // content it can't format.
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Box, Text } from 'ink';
 import { theme } from './theme.js';
 
@@ -250,11 +250,20 @@ function Block({ block, width }) {
 
 // Public: render a Markdown string as a column of Ink blocks. `width` sizes
 // tables/rules to the terminal.
-export function Markdown({ text, width }) {
-  const blocks = parseBlocks(text);
+//
+// Memoised hard: in alt-screen the WHOLE transcript re-renders on every keystroke
+// (and on every spinner/elapsed tick). Re-parsing every past assistant message's
+// Markdown each frame made typing scale O(transcript) — the "typing gets slow /
+// something's looping" symptom. parseBlocks is pure over `text`, so we cache it
+// per-text and wrap the component in React.memo so unchanged messages don't
+// re-parse or re-render at all.
+function MarkdownImpl({ text, width }) {
+  const blocks = useMemo(() => parseBlocks(text), [text]);
   return (
     <Box flexDirection="column">
       {blocks.map((b, i) => <Block key={i} block={b} width={width} />)}
     </Box>
   );
 }
+
+export const Markdown = React.memo(MarkdownImpl);

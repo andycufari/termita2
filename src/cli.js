@@ -118,7 +118,19 @@ async function bootstrapTUI() {
     React.createElement(App, { engine, config, provider, needsSetup }),
     { exitOnCtrlC: false, alternateScreen: true },
   );
-  await waitUntilExit();
+
+  // Clean up per-command output files on exit — whether the UI unmounts normally
+  // or the process is signalled. Best-effort; the 7-day pruner (log.js) is the
+  // backstop if we're killed hard (SIGKILL) and never run this.
+  const cleanup = () => { try { engine.dispose(); } catch { /* best-effort */ } };
+  process.once('SIGINT', () => { cleanup(); process.exit(0); });
+  process.once('SIGTERM', () => { cleanup(); process.exit(0); });
+
+  try {
+    await waitUntilExit();
+  } finally {
+    cleanup();
+  }
 }
 
 (async () => {

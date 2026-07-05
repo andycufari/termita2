@@ -5,6 +5,38 @@ All notable changes to **termita** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.1] — 2026-07-05
+
+### Fixed
+- **Memory leak / OOM in long sessions** — after ~an hour of use the process
+  could climb to ~4 GB and die with a V8 "heap out of memory" crash, with typing
+  growing slower and slower ("like something is looping"). Two causes: shell
+  commands held their **entire** output in memory, and the on-screen transcript
+  array grew **without bound** (the alternate screen has no native scrollback, so
+  every output line is a retained item). Both are now bounded.
+- **Typing slowdown on large transcripts** — in the alternate screen the whole
+  transcript re-renders on every keystroke, and each past reply's Markdown was
+  **re-parsed every frame**. Markdown parsing is now memoized per message and
+  transcript items are wrapped in `React.memo`, so a keystroke no longer
+  re-parses or re-renders the entire history (was ~O(transcript) per key).
+
+### Added
+- **Full command output saved to disk + searchable by the model** — a command's
+  complete output now streams to a per-command file under
+  `~/.config/termita/sessions/<date>/cmd-<id>.out`, while only a bounded head+tail
+  (first ~200 / last ~400 lines) is kept in memory. When output is trimmed, the
+  result the model sees cites the file path, so it can `grep`/`read` the omitted
+  middle on demand (no new tools — reuses the existing read-only ones). Nothing
+  is lost; memory stays bounded. Files are removed on exit, and session folders
+  older than 7 days are pruned on startup.
+- **ASCII-art wordmark on first run** — the setup/first-run screen now shows a
+  big block-letter **TERMITA** banner with the version; subsequent runs keep the
+  compact wordmark (now also showing the version).
+
+### Changed
+- On-screen transcript is capped at 600 items; older lines are dropped with an
+  "↑ N earlier lines trimmed" marker (the full output remains on disk).
+
 ## [2.6.0] — 2026-07-02
 
 ### Added

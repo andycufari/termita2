@@ -2,6 +2,13 @@
 // cwd persistence strategy (BUILDME §13 option a): after the command runs we
 // print its final $PWD to a DEDICATED fd (3), captured separately, so the cwd
 // marker NEVER mixes into stdout/stderr — no sentinel can ever leak into output.
+//
+// Memory: a command can print an unbounded amount (cat a huge file, a chatty
+// build). We DON'T hold it all in RAM — that's what drove the process to a 4GB
+// V8 OOM in long sessions. Instead we keep a bounded head+tail in memory (enough
+// for the return value + the model's clamped view) and stream the FULL output to
+// a per-command file on disk via ctx.onFull. When the model needs the omitted
+// middle it greps/reads that file (its path is surfaced in the clamped result).
 import { spawn } from 'node:child_process';
 
 // Live state shared across calls in one session.
@@ -9,8 +16,50 @@ export const shellState = {
   cwd: process.cwd(),
 };
 
+// How much output we retain IN MEMORY. The full stream still goes to disk via
+// ctx.onFull; these only bound the string handed back for the transcript/model.
+const HEAD_LINES = 200;   // keep the first N lines (how the command started)
+const TAIL_LINES = 400;   // keep the last N lines (where errors/exit usually are)
+const MAX_LINE_LEN = 4096; // clamp a single pathological line (e.g. minified blob)
+
+// A bounded ring that remembers the first HEAD_LINES and the last TAIL_LINES of a
+// text stream fed to it as arbitrary chunks, plus how many lines were dropped in
+// the middle. Never retains more than HEAD_LINES + TAIL_LINES lines.
+function makeLineWindow() {
+  const head = [];
+  const tail = [];
+  let dropped = 0;
+  let partial = '';        // trailing incomplete line, completed by the next chunk
+
+  const pushLine = (line) => {
+    const l = line.length > MAX_LINE_LEN ? line.slice(0, MAX_LINE_LEN) + '…[line truncated]' : line;
+    if (head.length < HEAD_LINES) { head.push(l); return; }
+    tail.push(l);
+    if (tail.length > TAIL_LINES) { tail.shift(); dropped++; }
+  };
+
+  return {
+    push(chunk) {
+      const s = partial + chunk;
+      const parts = s.split('\n');
+      partial = parts.pop(); // last piece may be incomplete
+      for (const p of parts) pushLine(p);
+    },
+    // finish + render the bounded string, inserting a marker for the gap.
+    render(fullPath) {
+      if (partial) { pushLine(partial); partial = ''; }
+      if (dropped === 0) return head.concat(tail).join('\n');
+      const where = fullPath
+        ? ` — full output at ${fullPath} (grep or read that file to see the rest)`
+        : '';
+      const marker = `\n… [${dropped} lines omitted${where}] …\n`;
+      return head.join('\n') + marker + tail.join('\n');
+    },
+  };
+}
+
 export function runShell(command, ctx = {}) {
-  const { onChunk, signal } = ctx;
+  const { onChunk, signal, onFull } = ctx;
   const cwd = ctx.cwd || shellState.cwd;
 
   // Run the user's command, then emit $PWD on fd 3 (captured out-of-band).
@@ -33,7 +82,8 @@ export function runShell(command, ctx = {}) {
       return;
     }
 
-    let raw = '';
+    const win = makeLineWindow(); // bounded head+tail kept in memory
+    let fullPath = null;          // per-command file the FULL output streams to
     let pwdOut = '';
     let killed = false;
 
@@ -44,8 +94,10 @@ export function runShell(command, ctx = {}) {
 
     const onData = (buf) => {
       const s = buf.toString();
-      raw += s;
-      if (onChunk && s) onChunk(s);
+      if (!s) return;
+      win.push(s);                 // bounded: only head+tail survive in RAM
+      if (onFull) fullPath = onFull(s) || fullPath; // stream full output to disk
+      if (onChunk) onChunk(s);     // live to the transcript
     };
 
     child.stdout.on('data', onData);
@@ -68,7 +120,7 @@ export function runShell(command, ctx = {}) {
 
     child.on('error', (err) => {
       if (err.name === 'AbortError' || killed) {
-        resolve({ output: cleanOutput(raw) + '\n[interrupted]', meta: { interrupted: true, exitCode: null } });
+        resolve({ output: cleanOutput(win.render(fullPath)) + '\n[interrupted]', meta: { interrupted: true, exitCode: null } });
       } else {
         resolve({ output: `error: ${err.message}`, meta: { error: true } });
       }
@@ -79,7 +131,7 @@ export function runShell(command, ctx = {}) {
       const np = pwdOut.trim();
       if (np) shellState.cwd = np;
 
-      const output = cleanOutput(raw);
+      const output = cleanOutput(win.render(fullPath));
       if (killed) {
         resolve({ output: (output ? output + '\n' : '') + '[interrupted]', meta: { interrupted: true, exitCode: null } });
         return;
@@ -87,7 +139,7 @@ export function runShell(command, ctx = {}) {
       const tail = code === 0 ? '' : `\n[exit ${code}]`;
       resolve({
         output: (output || '(no output)') + tail,
-        meta: { exitCode: code, cwd: shellState.cwd },
+        meta: { exitCode: code, cwd: shellState.cwd, fullPath },
       });
     });
   });

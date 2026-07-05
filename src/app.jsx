@@ -22,6 +22,37 @@ import { VERSION } from './cli.js';
 let _id = 0;
 const uid = () => `i${++_id}`;
 
+// Hard cap on how many transcript items we keep IN MEMORY (on-screen scrollback).
+// Alt-screen has no native scrollback, so `items` is the whole visible history —
+// left unbounded it climbed to a 4GB V8 OOM in long sessions. The full output of
+// every command is on disk (see shell.js / log.js), so trimming the oldest
+// on-screen lines loses nothing recoverable: the model still greps the disk log.
+// Kept modest on purpose — this also caps per-keystroke render/layout cost.
+const MAX_ITEMS = 600;
+const TRIM_TO = 550; // trim in a batch (not every append) to avoid array churn
+
+// Append items with a bounded length. When we exceed MAX_ITEMS we drop the
+// oldest down to TRIM_TO and leave a single marker so it's clear the on-screen
+// history was clipped (the full logs are still on disk). The marker carries a
+// running total of everything dropped so far, so repeated trims read as one
+// growing "N earlier lines trimmed" line rather than stacking up.
+function appendItems(cur, added) {
+  // Separate any existing trim marker from the real items first, so its historical
+  // count is never re-counted as freshly-dropped lines (that double-counted).
+  let prior = 0;
+  let base = cur;
+  if (cur[0]?.kind === 'trim') { prior = cur[0].count || 0; base = cur.slice(1); }
+
+  const next = added.length ? base.concat(added) : base;
+  if (next.length <= (prior ? MAX_ITEMS - 1 : MAX_ITEMS)) {
+    // still within budget — keep the marker (if any) at the front, untouched
+    return prior ? [cur[0], ...next] : next;
+  }
+  const dropped = next.length - TRIM_TO; // real items removed this trim
+  const kept = next.slice(dropped);
+  return [{ _k: uid(), kind: 'trim', count: prior + dropped }, ...kept];
+}
+
 export default function App({ engine, config, provider, needsSetup }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -77,7 +108,7 @@ export default function App({ engine, config, provider, needsSetup }) {
   const setupRef = useRef(false);
   const [lastOutputAt, setLastOutputAt] = useState(null); // ts of last live output line
 
-  const push = useCallback((item) => setItems((cur) => [...cur, { _k: uid(), ...item }]), []);
+  const push = useCallback((item) => setItems((cur) => appendItems(cur, [{ _k: uid(), ...item }])), []);
 
   // keep queueRef in sync so the engine event closure can read the latest queue
   useEffect(() => { queueRef.current = queue; }, [queue]);
@@ -149,7 +180,7 @@ export default function App({ engine, config, provider, needsSetup }) {
               danger: ev.gate?.danger || null, status: 'proposed',
             };
             if (existing) return cur.map((it) => (it.toolId === ev.id ? { ...it, ...data } : it));
-            return [...cur, { _k: uid(), ...data }];
+            return appendItems(cur, [{ _k: uid(), ...data }]);
           });
           break;
         case EVENTS.TOOL_AWAIT:
@@ -176,19 +207,19 @@ export default function App({ engine, config, provider, needsSetup }) {
           outputBuffers.current[ev.id] = partial;
           if (parts.length) {
             setLastOutputAt(Date.now()); // we got fresh output → not silent
-            setItems((cur) => [...cur, ...parts.map((line) => ({ _k: uid(), kind: 'output', text: line }))]);
+            setItems((cur) => appendItems(cur, parts.map((line) => ({ _k: uid(), kind: 'output', text: line }))));
           }
           break;
         }
         case EVENTS.TOOL_DONE: {
           // flush any trailing partial line, then a status line
           const partial = outputBuffers.current[ev.id];
-          outputBuffers.current[ev.id] = '';
+          delete outputBuffers.current[ev.id]; // release the per-tool buffer (was retained forever)
           setItems((cur) => {
             const add = [];
             if (partial && partial.length) add.push({ _k: uid(), kind: 'output', text: partial });
             add.push({ _k: uid(), kind: 'tooldone', exitCode: ev.meta?.exitCode, interrupted: ev.meta?.interrupted });
-            return [...cur, ...add];
+            return appendItems(cur, add);
           });
           patchItem(ev.id, { status: 'done' });
           break;
@@ -534,7 +565,7 @@ export default function App({ engine, config, provider, needsSetup }) {
           buffer each frame, so resize can't strand ghosts here. */}
       <Box flexGrow={1} flexShrink={1} flexDirection="column" overflowY="hidden" justifyContent="flex-end">
         <Box flexDirection="column" flexShrink={0}>
-          <Banner />
+          <Banner version={VERSION} firstRun={needsSetup} columns={columns} />
           {shownItems.map((it) => (
             <TranscriptItem key={it._k} item={it} width={columns} />
           ))}
@@ -832,7 +863,13 @@ function RunningIndicator({ tool, lastOutputAt, width }) {
   );
 }
 
-function TranscriptItem({ item, width }) {
+// Memoised: in alt-screen the whole transcript re-renders on every keystroke and
+// on every live-region timer tick (spinner 80ms, elapsed 250ms). Without memo,
+// each of those reconciles all ~600 items — that's the typing lag. Item objects
+// are stable references (created once, only patched when a tool's status
+// changes), so React.memo skips every item whose props didn't actually change;
+// a keystroke then only re-renders the input + live region. (see #perf)
+const TranscriptItem = React.memo(function TranscriptItem({ item, width }) {
   switch (item.kind) {
     case 'msg':
       return <Message who={item.who} text={item.text} reasoning={item.reasoning} thoughtMs={item.thoughtMs} width={width} />;
@@ -851,9 +888,15 @@ function TranscriptItem({ item, width }) {
       return <Notice text={item.text} level={item.level} />;
     case 'error':
       return <ErrorBox message={item.message} />;
+    case 'trim':
+      return (
+        <Text color={theme.faint} italic>
+          {'  '}↑ {item.count} earlier lines trimmed from view (full output saved on disk)
+        </Text>
+      );
     case 'help':
       return <HelpPanel />;
     default:
       return null;
   }
-}
+});
