@@ -42,6 +42,33 @@ export class OpenAIProvider {
     return (data.data || []).map((m) => m.id);
   }
 
+  // Best-effort: ask the server for the loaded model's context window so the
+  // footer gauge reflects reality instead of the 8k default. LM Studio's native
+  // /api/v0/models returns `loaded_context_length` / `max_context_length` per
+  // model; the OpenAI /v1/models shape sometimes carries `context_length` too.
+  // Returns a positive integer, or null if we can't tell (caller keeps its
+  // configured value). Never throws — this is a nicety, not a hard dependency.
+  async detectContextLength(modelId) {
+    const id = modelId || this.llm.model;
+    // Prefer LM Studio's richer native endpoint; the OpenAI base is the parent
+    // of /v1, so swap the trailing /v1 for /api/v0 when present.
+    const nativeBase = this.base.replace(/\/v1$/, '/api/v0');
+    for (const url of [`${nativeBase}/models`, `${this.base}/models`]) {
+      try {
+        const res = await fetch(url, { headers: this.headers() });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const list = data.data || data.models || [];
+        const hit = list.find((m) => (m.id || m.key) === id) || list.find((m) => m.state === 'loaded');
+        const n = pickContextLength(hit);
+        if (n) return n;
+      } catch {
+        // try the next url / give up quietly
+      }
+    }
+    return null;
+  }
+
   // Stream a completion. Calls handlers as data arrives:
   //   onToken(text), onReasoning(text)
   // Returns { text, reasoning, toolCalls: [{id,name,arguments(parsed)}] }
@@ -126,6 +153,26 @@ export class OpenAIProvider {
 
     return { text: fullText, reasoning, toolCalls };
   }
+}
+
+// Pull a context-window size out of a model description, tolerating the several
+// field names different servers use. Prefer the ACTUALLY-loaded length over the
+// theoretical max so the gauge matches what the running model can hold.
+function pickContextLength(m) {
+  if (!m || typeof m !== 'object') return null;
+  const candidates = [
+    m.loaded_context_length,
+    m.context_length,
+    m.max_context_length,
+    m.max_model_len,   // vLLM
+    m.n_ctx,           // llama.cpp
+    m.context_window,
+  ];
+  for (const c of candidates) {
+    const n = Number(c);
+    if (Number.isFinite(n) && n >= 256) return Math.floor(n);
+  }
+  return null;
 }
 
 function safeParseArgs(s) {

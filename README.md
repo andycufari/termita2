@@ -1,47 +1,43 @@
-# 🐜 termita
+# 🏴‍☠️ termita 🇦🇷
 
 [![npm version](https://img.shields.io/npm/v/termita.svg)](https://www.npmjs.com/package/termita)
 [![node](https://img.shields.io/node/v/termita.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/termita.svg)](./LICENSE)
 
-> **Terminal copilot.** A chat with an LLM that lives *inside your terminal* and
-> can operate the shell — one approved command at a time. Not an autonomous agent.
-> A copilot. You drive, it rides shotgun.
+> **Local AI first copilot for your console.**
 
 ```
- termita  ▸ terminal copilot
+ 🏴‍☠️  TERMITA  🇦🇷
 
- ◆ you   port 8000 is taken, what's using it?
+ ████████╗███████╗██████╗ ███╗   ███╗██╗████████╗ █████╗
+ ╚══██╔══╝██╔════╝██╔══██╗████╗ ████║██║╚══██╔══╝██╔══██╗
+    ██║   █████╗  ██████╔╝██╔████╔██║██║   ██║   ███████║
+    ██║   ██╔══╝  ██╔══██╗██║╚██╔╝██║██║   ██║   ██╔══██║
+    ██║   ███████╗██║  ██║██║ ╚═╝ ██║██║   ██║   ██║  ██║
+    ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝   ╚═╝   ╚═╝  ╚═╝
 
- ◇ term  let's see who's holding it:
-
-   ╭ shell ─────────────────────────────╮
-   │ $ ss -tlnp | grep :8000            │
-   │ check which process listens on 8000│
-   ╰────────────────────────────────────╯
-   ▸ Run      run it once
-     Edit     tweak the command
-     Always   allowlist this kind
-     No       decline
-     · ↑↓ move · enter · or R/E/A/N · esc cancel
+ Local AI first copilot for your console
 ```
 
-> termita mirrors your language — talk to it in English or Spanish and it replies
-> in kind.
+termita is a chat with a model that runs in your terminal and can operate the
+shell. It proposes one command at a time, explains what it does and why, and
+waits for you to approve it. The command runs, its real output streams into the
+chat, the model reads the result and responds. Then it's your turn again. One
+Node process, runnable over SSH on a headless box.
 
-termita proposes **one** shell step, explains *what it does and why*, and waits.
-You approve it. It runs, the **real output streams into the chat live**, the model
-reads the result and reacts. Then it's your turn again. One Node process you can
-run anywhere — including over SSH on a headless VPS.
+It talks to a local model by default — LM Studio, Ollama, or anything speaking
+the OpenAI-compatible API — and can also point at OpenAI or Anthropic.
 
-- **Copilot, not autopilot** — every mutating command is approved by you (or by an
-  allowlist you build). Dangerous commands (`rm -rf`, `dd`, `mkfs`, fork bombs…)
-  always prompt loudly, even in auto-approve mode.
-- **The terminal is the body** — real stdout/stderr streams in line-by-line, not a
-  paraphrase.
-- **Local-first, provider-flexible** — talks to any OpenAI-compatible endpoint
-  (LM Studio, Ollama, vLLM…), or directly to **OpenAI** or **Anthropic**.
-- **Portable & tiny** — pure Node, no native build, `npm i -g` and go.
+> termita replies in the language you write to it — English or Spanish.
+
+- Every command that changes something is approved by you, or by an allowlist you
+  build. `rm -rf`, `dd`, `mkfs`, fork bombs and the like always prompt, even in
+  auto-approve mode.
+- Real stdout/stderr streams in line by line — you read what actually happened,
+  not a summary of it.
+- Runs against any OpenAI-compatible endpoint (LM Studio, Ollama, vLLM…), or
+  OpenAI / Anthropic directly.
+- Pure Node, no native build. `npm i -g` and run it.
 
 ---
 

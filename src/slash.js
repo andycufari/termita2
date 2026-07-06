@@ -75,6 +75,23 @@ export async function runSlash(line, ctx) {
       return;
     }
 
+    case 'context':
+    case 'ctx': {
+      if (!arg) {
+        push({ kind: 'notice', text: `context window: ${(config.llm.contextSize || 8192).toLocaleString()} tokens — /context <n> to change (e.g. /context 32768)`, level: 'dim' });
+        return;
+      }
+      // accept "32768", "32k", "128K"
+      const m = /^(\d+)\s*([kK])?$/.exec(arg.trim());
+      const n = m ? Number.parseInt(m[1], 10) * (m[2] ? 1024 : 1) : NaN;
+      if (!Number.isFinite(n) || n < 256) {
+        push({ kind: 'notice', text: `context window must be an integer ≥ 256 (got "${arg}")`, level: 'warn' });
+        return;
+      }
+      ctx.setContextSize(n);
+      return;
+    }
+
     case 'allow':
     case 'allowlist': {
       const rules = config.policy.allowlist;

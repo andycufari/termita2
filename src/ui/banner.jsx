@@ -9,9 +9,10 @@ export function Header({ model, endpoint, autoApprove, reasoning }) {
   return (
     <Box justifyContent="space-between" paddingX={1} marginBottom={1}>
       <Text>
+        <Text>🏴‍☠️ </Text>
         <Text color={theme.accent} bold>termita</Text>
-        <Text color={theme.faint}> 2.0</Text>
-        <Text color={theme.dim}>  {glyphs.bullet} terminal copilot</Text>
+        <Text> 🇦🇷</Text>
+        <Text color={theme.dim}>  {glyphs.bullet} Local AI first copilot for your console</Text>
       </Text>
       <Text>
         {autoApprove && <Text color={theme.warn} bold>AUTO {glyphs.bolt}  </Text>}
@@ -23,32 +24,37 @@ export function Header({ model, endpoint, autoApprove, reasoning }) {
   );
 }
 
-// Block-letter TERMITA wordmark (each line padded to equal width so the neon
-// fill is a clean rectangle). Shown big on first run; compact otherwise.
+// Block-letter TERMITA wordmark. Box-drawing glyphs give crisp beveled edges;
+// shown big on first run, compact otherwise.
 const TERMITA_ART = [
-  '████████ ███████ ██████  ███    ███ ██ ████████  █████  ',
-  '   ██    ██      ██   ██ ████  ████ ██    ██    ██   ██  ',
-  '   ██    █████   ██████  ██ ████ ██ ██    ██    ███████  ',
-  '   ██    ██      ██   ██ ██  ██  ██ ██    ██    ██   ██  ',
-  '   ██    ███████ ██   ██ ██      ██ ██    ██    ██   ██  ',
+  '████████╗███████╗██████╗ ███╗   ███╗██╗████████╗ █████╗ ',
+  '╚══██╔══╝██╔════╝██╔══██╗████╗ ████║██║╚══██╔══╝██╔══██╗',
+  '   ██║   █████╗  ██████╔╝██╔████╔██║██║   ██║   ███████║',
+  '   ██║   ██╔══╝  ██╔══██╗██║╚██╔╝██║██║   ██║   ██╔══██║',
+  '   ██║   ███████╗██║  ██║██║ ╚═╝ ██║██║   ██║   ██║  ██║',
+  '   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝   ╚═╝   ╚═╝  ╚═╝',
 ];
 
 // Big ASCII-art splash — first run (or a wide enough terminal). Includes the
-// version so it's obvious which build is running.
+// version so it's obvious which build is running. Pirate flag flanks the
+// wordmark, Argentina flag on the right — this is a statement, not a product.
 function BigBanner({ version }) {
   return (
     <Box flexDirection="column" marginBottom={1} paddingX={1}>
+      <Box marginBottom={1}>
+        <Text>
+          <Text>🏴‍☠️  </Text>
+          <Text color={theme.brand} bold>TERMITA</Text>
+          <Text>  🇦🇷</Text>
+          <Text color={theme.dim}>   v{version}</Text>
+        </Text>
+      </Box>
       {TERMITA_ART.map((row, i) => (
         <Text key={i} color={theme.brand} bold>{row}</Text>
       ))}
       <Box marginTop={1}>
-        <Text>
-          <Text color={theme.accent} bold>{glyphs.termite} terminal copilot</Text>
-          <Text color={theme.dim}>  ·  v{version}</Text>
-          <Text color={theme.dim}>  ·  ride shotgun</Text>
-        </Text>
+        <Text color={theme.text}>Local AI first copilot for your console</Text>
       </Box>
-      <Text color={theme.dim}>one command at a time. you drive, it rides.</Text>
       <Text color={theme.faint}>/help for commands · tab = auto-approve · esc = interrupt</Text>
     </Box>
   );
@@ -58,16 +64,13 @@ function BigBanner({ version }) {
 function CompactBanner({ version }) {
   return (
     <Box flexDirection="column" marginBottom={1} paddingX={1}>
-      <Text color={theme.brand} bold>{'  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄'}</Text>
       <Text>
-        <Text color={theme.accent} bold>  ▌ </Text>
-        <Text color={theme.brand} bold>termita</Text>
-        {version ? <Text color={theme.faint}> v{version}</Text> : null}
-        <Text color={theme.dim}> · ride shotgun</Text>
-        <Text color={theme.accent} bold> ▐</Text>
+        <Text>🏴‍☠️  </Text>
+        <Text color={theme.brand} bold>TERMITA</Text>
+        <Text>  🇦🇷</Text>
+        {version ? <Text color={theme.faint}>  v{version}</Text> : null}
       </Text>
-      <Text color={theme.brand} bold>{'  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀'}</Text>
-      <Text color={theme.dim}>  one command at a time. you drive, it rides.</Text>
+      <Text color={theme.text}>  Local AI first copilot for your console</Text>
       <Text color={theme.faint}>  /help for commands · tab = auto-approve · esc = interrupt</Text>
     </Box>
   );

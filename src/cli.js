@@ -73,7 +73,7 @@ async function cmdDoctor() {
 
 function help() {
   console.log(`
-  ${c.magenta(c.bold('termita'))} ${c.dim(`${VERSION} — terminal copilot`)}
+  🏴‍☠️ ${c.magenta(c.bold('termita'))} 🇦🇷 ${c.dim(`${VERSION} — Local AI first copilot for your console`)}
 
   ${c.bold('usage')}
     termita            ${c.dim('open the chat TUI')}

@@ -5,6 +5,37 @@ All notable changes to **termita** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] — 2026-07-05
+
+### Fixed
+- **Single Esc no longer opens the jump-back picker.** One physical Esc reaches
+  the handler up to three times in the same tick (the mouse-wheel hook plus two
+  mounted `useInput` handlers), and the double-Esc detector — keyed on
+  `Date.now()` — treated the same-tick repeat as a second press, so a *single*
+  Esc opened "jump back to…" and stranded you there. Esc events are now coalesced
+  within a ~40 ms window: one Esc while busy interrupts and returns you to the
+  input box; one Esc while idle only shows the "esc again to jump back" hint; two
+  Esc opens the picker. (#esc)
+
+### Added
+- **Auto-detected context-window size.** The footer token gauge was hard-coded to
+  8 192 regardless of what the model actually had loaded. On startup termita now
+  asks the server (LM Studio's `/api/v0/models`, falling back to `/v1/models`) for
+  the loaded model's context length and adopts it — so a model loaded at, say,
+  120 k shows the real window. Best-effort and silent; never blocks or errors out.
+- **`/context [n]` command** (alias `/ctx`) to show or override the context-window
+  size the gauge uses. Accepts `32768`, `32k`, `128K`. Persisted to config.
+- **Cancel row in the jump-back picker.** The "↩ jump back to…" list now ends with
+  an explicit **cancel — keep going where I am** entry (arrow to it + Enter, or
+  just press Esc) so it's obvious you can bail without rewinding.
+
+### Changed
+- **New splash + identity.** The startup banner is now `🏴‍☠️ TERMITA 🇦🇷` over a
+  crisp box-drawing wordmark, with a single statement line — *Local AI first
+  copilot for your console*. Dropped the old "ride shotgun / you drive, it rides"
+  framing from the banner, the README, the system persona, and the package
+  description. No buzzwords.
+
 ## [2.6.1] — 2026-07-05
 
 ### Fixed

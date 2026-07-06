@@ -70,6 +70,7 @@ export default function App({ engine, config, provider, needsSetup }) {
   const [autoApprove, setAutoApprove] = useState(config.policy.autoApprove);
   const [reasoning, setReasoning] = useState(config.llm.reasoning);
   const [model, setModel] = useState(config.llm.model);
+  const [contextSize, setContextSize] = useState(config.llm.contextSize || 8192);
   const [status, setStatus] = useState(null);
 
   const [rewind, setRewind] = useState(null); // { points:[{idx,text}], sel } when in jump-back mode
@@ -93,6 +94,12 @@ export default function App({ engine, config, provider, needsSetup }) {
   const histIdx = useRef(-1);
   const ctrlC = useRef(0);
   const lastEsc = useRef(0); // timestamp of last Esc, for double-Esc detection
+  // Coalesce: ONE physical Esc reaches handleEscape up to 3× in the same tick
+  // (mouse-wheel hook + main useInput + PromptInput useInput all fire — see #esc).
+  // Without this, the 2nd same-tick call satisfies the <600ms double-Esc window
+  // and jump-back would open on a SINGLE press. We stamp the tick and ignore any
+  // repeat within a few ms, so a burst counts as one logical Esc.
+  const escBurst = useRef(0);
   const outputBuffers = useRef({}); // id -> accumulated live output
   const queueRef = useRef([]); // mirror of `queue` for the engine event closure
   const itemsRef = useRef([]); // mirror of `items` for the wheel-scroll closure
@@ -286,6 +293,7 @@ export default function App({ engine, config, provider, needsSetup }) {
         setModel: (m) => doSetModel(m),
         openModelPicker: () => openModelPicker(),
         setMaxTokens: (n) => doSetMaxTokens(n),
+        setContextSize: (n) => doSetContextSize(n),
         showHelp: () => push({ kind: 'help' }),
         openSetup: () => setSetupOpen(true),
         quit: () => exit(),
@@ -325,6 +333,30 @@ export default function App({ engine, config, provider, needsSetup }) {
     saveConfig(config);
     push({ kind: 'notice', text: `maxTokens → ${n}`, level: 'ok' });
   }, [config, provider, push]);
+
+  // Set the context-window size used by the footer gauge. `announce` is false for
+  // the silent startup auto-detect (no notice line), true for the /context command.
+  const doSetContextSize = useCallback((n, announce = true) => {
+    config.llm.contextSize = n;
+    saveConfig(config);
+    setContextSize(n);
+    if (announce) push({ kind: 'notice', text: `context window → ${n.toLocaleString()} tokens`, level: 'ok' });
+  }, [config, push]);
+
+  // On startup, ask the server what context length the model actually has loaded
+  // and adopt it — so the gauge isn't stuck at the 8k default when LM Studio is
+  // configured for more. Only overrides when detection differs; never throws.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (typeof provider.detectContextLength !== 'function') return;
+        const n = await provider.detectContextLength(config.llm.model);
+        if (!cancelled && n && n !== (config.llm.contextSize || 8192)) doSetContextSize(n, false);
+      } catch { /* best-effort; keep the configured value */ }
+    })();
+    return () => { cancelled = true; };
+  }, [provider, config, doSetContextSize]);
 
   const doSetModel = useCallback((m) => {
     setModel(m);
@@ -373,6 +405,15 @@ export default function App({ engine, config, provider, needsSetup }) {
   // identity never churns either. (#esc)
   const handleEscape = useCallback(() => {
     if (setupRef.current) return;
+
+    // Coalesce same-tick duplicate Esc events into one (see escBurst above).
+    // A single physical press dispatches to several useInput handlers back-to-
+    // back; only the first should drive the state machine. 40ms comfortably
+    // covers one dispatch burst while staying far below any human double-tap.
+    const t = Date.now();
+    if (t - escBurst.current < 40) return;
+    escBurst.current = t;
+
     if (rewindRef.current) { setRewind(null); return; } // esc out of rewind mode
 
     // Single Esc while busy / streaming / a tool is running -> interrupt now.
@@ -459,12 +500,19 @@ export default function App({ engine, config, provider, needsSetup }) {
       return;
     }
 
-    // rewind (jump-back) picker owns the keyboard while open
+    // rewind (jump-back) picker owns the keyboard while open. The selectable
+    // range is points + one trailing "cancel" row (index === points.length),
+    // so ↑↓ wrap through N+1 positions and Enter on the last one just closes.
     if (rewind) {
+      const slots = rewind.points.length + 1; // +1 for the cancel row
       if (key.escape) { setRewind(null); return; }
-      if (key.upArrow) { setRewind((r) => ({ ...r, sel: (r.sel - 1 + r.points.length) % r.points.length })); return; }
-      if (key.downArrow) { setRewind((r) => ({ ...r, sel: (r.sel + 1) % r.points.length })); return; }
-      if (key.return) { applyRewind(rewind.points[rewind.sel]); return; }
+      if (key.upArrow) { setRewind((r) => ({ ...r, sel: (r.sel - 1 + slots) % slots })); return; }
+      if (key.downArrow) { setRewind((r) => ({ ...r, sel: (r.sel + 1) % slots })); return; }
+      if (key.return) {
+        if (rewind.sel >= rewind.points.length) { setRewind(null); return; } // cancel row
+        applyRewind(rewind.points[rewind.sel]);
+        return;
+      }
       return;
     }
 
@@ -543,8 +591,8 @@ export default function App({ engine, config, provider, needsSetup }) {
   const toolRunning = !!runningTool;
 
   // rough token estimate of the session (chars/4) + configurable context size
+  // (state, so /context and startup auto-detect re-render the gauge live).
   const tokens = estimateTokens(engine.history);
-  const contextSize = config.llm.contextSize || 8192;
   const ctxPct = Math.min(100, Math.round((tokens / contextSize) * 100));
   // colour the gauge by how full the window is: dim < 60% < amber < 85% < red
   const ctxColor = ctxPct >= 85 ? theme.danger : ctxPct >= 60 ? theme.warn : theme.dim;
@@ -598,7 +646,12 @@ export default function App({ engine, config, provider, needsSetup }) {
               {i === rewind.sel ? glyphs.bullet : ' '} {p.text.length > 64 ? p.text.slice(0, 64) + '…' : p.text}
             </Text>
           ))}
-          <Text color={theme.faint}>  ↑↓ select · enter rewind here · esc cancel</Text>
+          {/* explicit cancel row: sel === points.length means "stay put". Arrow
+              to it + Enter, or just hit Esc — both close without rewinding. */}
+          <Text color={rewind.sel === rewind.points.length ? theme.warn : theme.dim} bold={rewind.sel === rewind.points.length}>
+            {rewind.sel === rewind.points.length ? glyphs.bullet : ' '} cancel — keep going where I am
+          </Text>
+          <Text color={theme.faint}>  ↑↓ select · enter · esc cancel</Text>
         </Box>
       ) : picker ? (
         /* interactive /model picker: arrow-select a model, no typing the id */
