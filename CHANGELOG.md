@@ -5,6 +5,24 @@ All notable changes to **termita** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.5] — 2026-07-05
+
+### Changed
+- **ASCII splash shows on every launch**, not just first run — the banner was
+  gated on `firstRun`, so after setup you only saw the one-line wordmark. Now the
+  full box-drawing TERMITA art renders whenever the terminal is wide enough.
+- **Input line is now bright cyan** (was pink/magenta) — the input box border and
+  the `›` prompt marker.
+- **`AUTO ⚡ (tab off)` → `AUTO-ACCEPT ⚡`** in the footer.
+
+### Removed
+- **Input placeholder** — the input is now a bare cursor (no "talk to termita…").
+- **Idle hint line** under the input (`/help · /setup · tab auto-approve · …`).
+  Contextual cues during approval/running/streaming are kept.
+
+### Added
+- **`/credits`** (alias `/about`) — 🏴‍☠️ termita 🇦🇷 · @andycufari · Enjoy the ride.
+
 ## [2.7.0] — 2026-07-05
 
 ### Fixed

@@ -127,6 +127,11 @@ export async function runSlash(line, ctx) {
       return;
     }
 
+    case 'credits':
+    case 'about':
+      push({ kind: 'msg', who: 'term', text: '🏴‍☠️ termita 🇦🇷\n@andycufari · 2026\nEnjoy the ride 🏴‍☠️ 🇦🇷' });
+      return;
+
     default:
       push({ kind: 'notice', text: `unknown command: /${cmd} — try /help`, level: 'warn' });
   }

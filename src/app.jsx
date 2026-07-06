@@ -699,7 +699,7 @@ export default function App({ engine, config, provider, needsSetup }) {
           {/* input / edit prompt */}
           <Box
             borderStyle="round"
-            borderColor={pending ? theme.faint : theme.accent}
+            borderColor={pending ? theme.faint : theme.brand}
             borderLeft={false}
             borderRight={false}
             paddingX={1}
@@ -718,7 +718,7 @@ export default function App({ engine, config, provider, needsSetup }) {
               </>
             ) : (
               <>
-                <Box flexShrink={0}><Text color={pending ? theme.faint : theme.accent} bold>{glyphs.prompt} </Text></Box>
+                <Box flexShrink={0}><Text color={pending ? theme.faint : theme.brand} bold>{glyphs.prompt} </Text></Box>
                 <Box flexGrow={1}>
                   <PromptInput
                     value={input}
@@ -738,16 +738,15 @@ export default function App({ engine, config, provider, needsSetup }) {
             )}
           </Box>
 
-          {/* hint line (its own row so it never collides with the brand/status
-              on narrow terminals). Hidden when the command menu is open. */}
-          {!showCmdMenu && (
+          {/* contextual cue while something is happening (approval / running /
+              streaming). No idle hint — the input sits on its own clean line.
+              Hidden when the command menu is open. */}
+          {!showCmdMenu && (pending || toolRunning || busy) && (
             <Box paddingLeft={1}>
               <Text color={theme.faint}>
                 {pending ? '↑↓ + enter · or R/E/A/N · esc cancels'
                   : toolRunning ? 'running… esc to stop'
-                  : busy ? 'esc to interrupt'
-                  : narrow ? '/help · tab auto'
-                  : '/help · /setup · tab auto-approve · esc esc to jump back'}
+                  : 'esc to interrupt'}
               </Text>
             </Box>
           )}
@@ -757,7 +756,7 @@ export default function App({ engine, config, provider, needsSetup }) {
           <Box paddingLeft={1} justifyContent="space-between" flexWrap="wrap">
             <MascotTag version={VERSION} />
             <Text>
-              {autoApprove && <Text color={theme.warn} bold>AUTO {glyphs.bolt}{narrow ? '' : ' (tab off)'} </Text>}
+              {autoApprove && <Text color={theme.warn} bold>AUTO-ACCEPT {glyphs.bolt} </Text>}
               {reasoning && <Text color={theme.faint}>{glyphs.thought} think </Text>}
               <Text color={ctxColor}>ctx {fmtTokens(tokens)}/{fmtTokens(contextSize)} {ctxPct}% </Text>
               <Text color={theme.brandDim}>{clampText(model, narrow ? 16 : 40)}</Text>
@@ -835,7 +834,7 @@ function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, se
   };
 
   if (disabled) return <Text color={theme.faint}>{value || '(running… esc to stop)'}</Text>;
-  return <TextInput value={value} onChange={onChange} onSubmit={handleSubmit} placeholder="talk to termita…  (ctrl+j, shift+enter, or \ = newline)" />;
+  return <TextInput value={value} onChange={onChange} onSubmit={handleSubmit} />;
 }
 
 // Rough token estimate: ~4 chars/token across all message content.

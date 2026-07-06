@@ -76,12 +76,13 @@ function CompactBanner({ version }) {
   );
 }
 
-// `firstRun` (or a terminal wide enough for the art) → big splash with version.
-// Otherwise the compact wordmark. `columns` avoids wrapping the art on small
-// terminals, which would look broken.
-export function Banner({ version, firstRun = false, columns = 80 }) {
+// Show the full ASCII splash whenever the terminal is wide enough for it — the
+// art is the identity, so it renders every launch, not just the first. Only
+// fall back to the one-line wordmark on terminals too narrow for the art (it
+// would wrap and look broken). `firstRun` is accepted for API stability.
+export function Banner({ version, firstRun = false, columns = 80 }) { // eslint-disable-line no-unused-vars
   const wideEnough = columns >= 58; // art is ~56 cols; leave a little margin
-  if (firstRun && wideEnough) return <BigBanner version={version} />;
+  if (wideEnough) return <BigBanner version={version} />;
   return <CompactBanner version={version} />;
 }
 
