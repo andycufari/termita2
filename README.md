@@ -212,6 +212,25 @@ dangerous patterns, which always prompt with a red warning. File writes auto-run
 
 **Esc** interrupts anything: a streaming reply, a running command, or a prompt.
 
+### Run a command yourself — `:`
+
+Type a line starting with `:` to run a command **directly** — no model round-trip,
+no approval prompt. You see the full, real output stream in; the model is then
+handed the *trimmed* version so it stays in sync with what happened (a `cd`, an
+install, a config edit) without blowing the context.
+
+```
+you  › :ls -la
+      (full output streams in)
+you  › :git status
+```
+
+Full-screen programs work too. `:vim notes.txt`, `:htop`, `:less big.log`,
+`:lazygit` — termita **suspends**, hands the whole terminal to the program (so
+it's fully interactive, exactly as if you'd typed it in your shell), and redraws
+itself when you quit. The model can't see inside those (there's no output to
+capture) — it's just told you ran it.
+
 ### Slash commands
 
 | Command              | Action                                          |
@@ -276,8 +295,9 @@ cites the URLs it used. Without a key the tool stays hidden from the model.
 
 termita runs in the alternate screen (no resize ghosting), so it draws its own
 scrollable transcript. Scroll with the **mouse wheel**, `PageUp`/`PageDown`,
-`Ctrl+↑`/`Ctrl+↓`, `Home` (top) / `End` (latest). New output auto-follows the
-bottom until you scroll up.
+`Ctrl+↑`/`Ctrl+↓`, `Home` (oldest) / `End` (latest) — it scrolls by rows, so the
+wheel moves evenly and `Home` lands on real history instead of a blank top. New
+output auto-follows the bottom until you scroll up.
 
 To **select/copy** text with the mouse while wheel-scroll is on, hold a modifier
 while dragging — **Option** on macOS (iTerm2/Terminal.app), **Shift** on most

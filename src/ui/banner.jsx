@@ -86,7 +86,9 @@ export function HelpPanel() {
     ['TAB', 'toggle auto-approve'],
     ['R / E / A / N', 'run / edit / always / no'],
     ['Esc', 'interrupt streaming or a prompt'],
+    [':command', 'run a command yourself (e.g. :ls, :vim x)'],
     ['↑ / ↓', 'history (in input)'],
+    ['wheel / PgUp / Home', 'scroll the transcript'],
   ];
   return (
     <Box flexDirection="column" paddingLeft={2} marginBottom={1}>

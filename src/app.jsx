@@ -2,7 +2,7 @@
 // commands, subscribes to engine events. The engine is UI-agnostic; this is the
 // only place that knows about both.
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { Box, Text, useApp, useInput, useStdout, useStdin } from 'ink';
 import TextInput from 'ink-text-input';
 import { EVENTS } from './engine/events.js';
 import { theme, glyphs } from './ui/theme.js';
@@ -13,6 +13,7 @@ import {
 } from './ui/components.jsx';
 import { saveConfig } from './config/config.js';
 import { setCognito as memSetCognito } from './config/memory.js';
+import { runInteractive } from './tools/interactive.js';
 import { runSlash } from './slash.js';
 import Setup from './ui/setup.jsx';
 import { useTerminalSize } from './ui/use-terminal-size.js';
@@ -31,6 +32,39 @@ const uid = () => `i${++_id}`;
 // Kept modest on purpose — this also caps per-keystroke render/layout cost.
 const MAX_ITEMS = 600;
 const TRIM_TO = 550; // trim in a batch (not every append) to avoid array churn
+
+// Row-budget scroll (see shownItems in render). These are ESTIMATES — Ink doesn't
+// expose measured heights — tuned to be slightly generous so the flex-end clip
+// never leaves the viewport half-empty. BANNER_ROWS approximates the always-first
+// banner block; CHROME_ROWS is the fixed input+footer area below the transcript.
+const BANNER_ROWS = 9;
+const CHROME_ROWS = 6;
+
+// Estimate how many terminal rows an item renders to, so scrolling can move by
+// rows instead of by items (items vary from 1 row to a dozen). Close enough:
+// wrap long text by the column width, add the fixed margins each kind carries.
+function itemRows(it, cols) {
+  const w = Math.max(20, (cols || 80) - 2);
+  const wrap = (s, indent = 0) => Math.max(1, Math.ceil((String(s || '').length + indent) / Math.max(10, w - indent)));
+  switch (it.kind) {
+    case 'msg': {
+      // role tag (1) + body (wrapped, indent 2) + bottom margin (1); model
+      // replies are markdown and often multi-line — count newlines too.
+      const lines = String(it.text || '').split('\n');
+      let body = 0;
+      for (const ln of lines) body += wrap(ln, 2);
+      return 1 + body + 1 + (it.reasoning ? 1 : 0);
+    }
+    case 'output': return wrap(it.text, 4);
+    case 'tool': return 2;
+    case 'tooldone': return 1;
+    case 'notice': return wrap(it.text, 2);
+    case 'error': return wrap(it.message, 2) + 2;
+    case 'trim': return 1;
+    case 'help': return 16;
+    default: return 1;
+  }
+}
 
 // Append items with a bounded length. When we exceed MAX_ITEMS we drop the
 // oldest down to TRIM_TO and leave a single marker so it's clear the on-screen
@@ -57,6 +91,7 @@ function appendItems(cur, added) {
 export default function App({ engine, config, provider, needsSetup }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
+  const { stdin, setRawMode } = useStdin();
 
   const [setupOpen, setSetupOpen] = useState(!!needsSetup);
   const [items, setItems] = useState([]); // transcript items
@@ -75,6 +110,7 @@ export default function App({ engine, config, provider, needsSetup }) {
   const [mouseCapture, setMouseCapture] = useState(config.ui?.mouseCapture !== false); // wheel-scroll vs native select
   const [cognito, setCognito] = useState(false); // incognito: memory blackout (session-only)
   const [status, setStatus] = useState(null);
+  const [repaint, setRepaint] = useState(0); // bump to force a full redraw after suspend/hand-off
 
   const [rewind, setRewind] = useState(null); // { points:[{idx,text}], sel } when in jump-back mode
   const [cmdSel, setCmdSel] = useState(0); // highlighted item in the `/` autocomplete
@@ -83,14 +119,21 @@ export default function App({ engine, config, provider, needsSetup }) {
   const { columns, rows } = useTerminalSize(); // reactive terminal size (responsive)
 
   // In-app transcript scroll (alt-screen has no native scrollback). `scrollUp`
-  // is how many lines we've scrolled UP from the bottom; 0 = pinned to bottom
-  // (auto-follows new output). PageUp/PageDown adjust it (see useInput).
+  // is how many ROWS we've scrolled UP from the bottom; 0 = pinned to bottom
+  // (auto-follows new output). Rows — not items — because items have wildly
+  // different heights (a wrapped message vs a one-line output), so scrolling by
+  // item count lurched unevenly and Home sliced the list empty (→ blank screen,
+  // the "goes to the top and bypasses history" bug). We clamp to the total
+  // content height minus a viewport so you can never scroll past the oldest line.
   const [scrollUp, setScrollUp] = useState(0);
+  const maxScrollRef = useRef(0);   // total rows - viewport; set during render
+  const totalRowsRef = useRef(0);   // estimated rows of the whole transcript
+  const viewportRef = useRef(10);   // estimated rows the transcript viewport can show
 
-  // Step the scroll by N items (clamped): +up = older, -down = latest. Shared by
-  // the mouse wheel, PgUp/PgDn and Ctrl+↑/↓ so all three stay consistent.
+  // Step the scroll by N ROWS (clamped to [0, maxScroll]): +up = older, -down =
+  // latest. Shared by the wheel, PgUp/PgDn and Ctrl+↑/↓ so all stay consistent.
   const scrollBy = useCallback((step) => {
-    setScrollUp((s) => Math.max(0, Math.min(itemsRef.current.length, s + step)));
+    setScrollUp((s) => Math.max(0, Math.min(maxScrollRef.current, s + step)));
   }, []);
 
   const inputHistory = useRef([]);
@@ -116,6 +159,7 @@ export default function App({ engine, config, provider, needsSetup }) {
   const pendingRef = useRef(null);
   const rewindRef = useRef(null);
   const setupRef = useRef(false);
+  const mouseCaptureRef = useRef(config.ui?.mouseCapture !== false); // read by suspendRunner
   const [lastOutputAt, setLastOutputAt] = useState(null); // ts of last live output line
 
   const push = useCallback((item) => setItems((cur) => appendItems(cur, [{ _k: uid(), ...item }])), []);
@@ -133,6 +177,7 @@ export default function App({ engine, config, provider, needsSetup }) {
   useEffect(() => { pendingRef.current = pending; }, [pending]);
   useEffect(() => { rewindRef.current = rewind; }, [rewind]);
   useEffect(() => { setupRef.current = setupOpen; }, [setupOpen]);
+  useEffect(() => { mouseCaptureRef.current = mouseCapture; }, [mouseCapture]);
 
   // mouse wheel → scroll the in-app transcript; lone Esc → interrupt (safety net
   // for when Ink's parser holds Esc back, see use-mouse-wheel.js). Esc goes
@@ -149,17 +194,18 @@ export default function App({ engine, config, provider, needsSetup }) {
   // reset the autocomplete highlight whenever the typed command changes
   useEffect(() => { setCmdSel(0); }, [input]);
 
-  // Keep the scroll position stable when the transcript changes. If we're
-  // scrolled up and new items arrive, bump `scrollUp` by the delta so the view
+  // Keep the scroll position stable when the transcript grows. If we're scrolled
+  // up and new content arrives, bump `scrollUp` by the ROWS added so the view
   // stays anchored on the same content instead of drifting toward the bottom.
-  // If items shrink (/clear, rewind), clamp so we don't scroll past the top.
-  const prevItemCount = useRef(items.length);
+  // (When pinned to bottom, scrollUp stays 0 and auto-follows.) Shrinks (/clear,
+  // rewind) are handled by the clamp against maxScroll during render.
+  const prevTotalRows = useRef(0);
   useEffect(() => {
-    const delta = items.length - prevItemCount.current;
-    prevItemCount.current = items.length;
+    const total = totalRowsRef.current;
+    const delta = total - prevTotalRows.current;
+    prevTotalRows.current = total;
     if (delta > 0) setScrollUp((s) => (s > 0 ? s + delta : 0)); // anchored only when already scrolled up
-    else if (delta < 0) setScrollUp((s) => Math.min(s, items.length));
-  }, [items.length]);
+  }, [items]);
 
   const patchItem = useCallback((id, patch) => {
     setItems((cur) => cur.map((it) => (it.toolId === id ? { ...it, ...patch } : it)));
@@ -272,11 +318,55 @@ export default function App({ engine, config, provider, needsSetup }) {
     return off;
   }, [engine, push, patchItem, config.llm.endpoint]);
 
+  // Suspend termita and hand the real terminal to a full-screen program (vim,
+  // htop, less…). We can't host it inside the Ink tree — it needs the TTY — so we
+  // leave the alternate screen, drop mouse capture, restore cooked input, run the
+  // child attached to the terminal, then re-enter the alt screen and force Ink to
+  // repaint. Mirrors how git/less shell out to $EDITOR. (see tools/interactive.js)
+  const suspendRunner = useCallback(async (cmd, opts) => {
+    // 1) release termita's grip on the terminal
+    try { stdout.write('\x1b[?1006l\x1b[?1002l'); } catch { /* mouse off */ }
+    try { stdout.write('\x1b[?1049l'); } catch { /* leave alt-screen */ }
+    try { if (typeof setRawMode === 'function') setRawMode(false); } catch { /* cooked */ }
+    if (stdin?.isPaused && !stdin.isPaused()) { try { stdin.pause(); } catch { /* ok */ } }
+
+    let res;
+    try {
+      res = await runInteractive(cmd, opts);
+    } finally {
+      // 2) reclaim it and force a full repaint of our UI
+      try { if (typeof setRawMode === 'function') setRawMode(true); } catch { /* raw */ }
+      try { stdin?.resume?.(); } catch { /* ok */ }
+      try { stdout.write('\x1b[?1049h'); } catch { /* re-enter alt-screen */ }
+      if (mouseCaptureRef.current) { try { stdout.write('\x1b[?1002h\x1b[?1006h'); } catch { /* mouse on */ } }
+      try { stdout.write('\x1b[2J\x1b[H'); } catch { /* clear */ }
+      // nudge Ink to redraw the whole tree on the fresh screen
+      setRepaint((n) => n + 1);
+    }
+    return res;
+  }, [stdout, stdin, setRawMode]);
+
   // --- Submit a user line ---------------------------------------------------
   const submit = useCallback(async (raw) => {
     const text = raw.trim();
     setInput('');
     if (!text) return;
+
+    // `:cmd` — run a command directly (no model, no approval). You see the full
+    // real output; the model is told the trimmed version afterward so it stays in
+    // sync. Full-screen programs suspend termita and take the terminal. (#direct)
+    if (text.startsWith(':') && text.length > 1) {
+      const cmd = text.slice(1).trim();
+      if (!cmd) return;
+      inputHistory.current.unshift(text);
+      histIdx.current = -1;
+      if (busy) { push({ kind: 'notice', text: 'busy — wait for the current turn (esc to stop), then run your `:` command', level: 'warn' }); return; }
+      setBusy(true);
+      setBusyAt(Date.now());
+      engine.runDirect(cmd, { suspendRunner });
+      return;
+    }
+
     inputHistory.current.unshift(text);
     histIdx.current = -1;
 
@@ -313,7 +403,7 @@ export default function App({ engine, config, provider, needsSetup }) {
     setBusy(true);
     setBusyAt(Date.now());
     engine.send(text);
-  }, [engine, config, provider, push, exit, busy]);
+  }, [engine, config, provider, push, exit, busy, suspendRunner]);
 
   const doToggleAuto = useCallback(() => {
     setAutoApprove((cur) => {
@@ -526,13 +616,17 @@ export default function App({ engine, config, provider, needsSetup }) {
     // state so you can scroll while busy/streaming. PgUp/PgDn step by ~a page;
     // Home jumps to the top, End/PgDn-to-0 returns to the latest. `scrollUp` is
     // clamped to the item count in render; stepping past the end pins to bottom.
-    if (key.pageUp) { scrollBy(5); return; }
-    if (key.pageDown) { scrollBy(-5); return; }
+    // Scroll a near-full page (leave 1 row of overlap for orientation).
+    const page = Math.max(1, (viewportRef.current || 10) - 1);
+    if (key.pageUp) { scrollBy(page); return; }
+    if (key.pageDown) { scrollBy(-page); return; }
     // Ctrl+↑ / Ctrl+↓ scroll too — a fallback for keyboards/layouts where PgUp/
     // PgDn need Fn or are grabbed by the terminal (e.g. some Konsole profiles).
     if (key.ctrl && key.upArrow) { scrollBy(3); return; }
     if (key.ctrl && key.downArrow) { scrollBy(-3); return; }
-    if (key.home && items.length) { setScrollUp(items.length); return; }
+    // Home → oldest line (clamped so a viewport stays full, not a blank screen);
+    // End → back to the latest (pinned to bottom).
+    if (key.home) { setScrollUp(maxScrollRef.current); return; }
     if (key.end) { setScrollUp(0); return; }
 
     // Edit mode handled by its own TextInput; ignore here
@@ -641,23 +735,56 @@ export default function App({ engine, config, provider, needsSetup }) {
   // colour the gauge by how full the window is: dim < 60% < amber < 85% < red
   const ctxColor = ctxPct >= 85 ? theme.danger : ctxPct >= 60 ? theme.warn : theme.dim;
 
-  // Transcript items shown in the scroll viewport. We're in alt-screen now, so
-  // there's no native scrollback: the whole transcript is one in-app-scrolled
-  // region. `scrollUp` drops that many items from the BOTTOM (so older content
-  // shows); the clipped, bottom-pinned Box keeps only what fits the viewport.
+  // Transcript items shown in the scroll viewport. Alt-screen has no native
+  // scrollback, so the whole transcript is one in-app-scrolled region measured in
+  // ROWS. We estimate each item's rendered height, sum it, and derive:
+  //   viewport  = rows the transcript area can show (screen minus fixed chrome)
+  //   maxScroll = total rows - viewport (how far up you can go; clamps Home)
+  // then window the items so exactly the rows around the scroll offset render.
+  // The Box below still uses overflow:hidden + flex-end to pixel-clip the edges,
+  // but windowing by rows here is what makes the wheel move evenly and stops Home
+  // from slicing the list empty (the old item-count math did — that was the bug).
   const allItems = items; // proposed/running/done all render the same in-band
-  const shownItems = scrollUp > 0 ? allItems.slice(0, Math.max(0, allItems.length - scrollUp)) : allItems;
-  const atBottom = scrollUp === 0;
+  const rowsPerItem = allItems.map((it) => itemRows(it, columns));
+  const totalRows = rowsPerItem.reduce((a, b) => a + b, 0) + BANNER_ROWS;
+  // Fixed chrome below the transcript (input box + footer + a little slack). The
+  // transcript viewport gets whatever's left of the screen height.
+  const viewport = Math.max(3, rows - CHROME_ROWS);
+  const maxScroll = Math.max(0, totalRows - viewport);
+  const clampedScroll = Math.min(scrollUp, maxScroll);
+  totalRowsRef.current = totalRows;
+  viewportRef.current = viewport;
+  maxScrollRef.current = maxScroll;
+
+  // Walk items from the bottom, dropping `clampedScroll` rows off the end, then
+  // keeping ~a viewport of rows above that. Over-include by a couple items so the
+  // flex-end clip never shows a half-empty screen at the boundaries.
+  const bottomDrop = clampedScroll;         // rows hidden below the viewport
+  let acc = 0;
+  let endIdx = allItems.length;             // exclusive; last item to show + 1
+  for (let i = allItems.length - 1; i >= 0; i--) {
+    if (acc >= bottomDrop) { endIdx = i + 1; break; }
+    acc += rowsPerItem[i];
+    if (i === 0) endIdx = 0;
+  }
+  // fill a viewport's worth of rows above endIdx
+  let need = viewport + 2;
+  let startIdx = endIdx;
+  for (let i = endIdx - 1; i >= 0 && need > 0; i--) { need -= rowsPerItem[i]; startIdx = i; }
+  const shownItems = allItems.slice(startIdx, endIdx);
+  const atBottom = clampedScroll === 0;
 
   return (
-    <Box flexDirection="column" paddingX={1} height={rows}>
+    <Box key={`app-${repaint}`} flexDirection="column" paddingX={1} height={rows}>
       {/* Transcript viewport: flexGrow takes whatever height the live region
           below doesn't use; overflowY:hidden + justifyContent:flex-end clip to
           the latest content (pinned to bottom). Alt-screen repaints the whole
           buffer each frame, so resize can't strand ghosts here. */}
       <Box flexGrow={1} flexShrink={1} flexDirection="column" overflowY="hidden" justifyContent="flex-end">
         <Box flexDirection="column" flexShrink={0}>
-          <Banner version={VERSION} firstRun={needsSetup} columns={columns} />
+          {/* Banner only when the oldest content is in view — otherwise it would
+              wrongly pin to the top of every scrolled-into-the-middle window. */}
+          {startIdx === 0 && <Banner version={VERSION} firstRun={needsSetup} columns={columns} />}
           {shownItems.map((it) => (
             <TranscriptItem key={it._k} item={it} width={columns} />
           ))}
@@ -674,7 +801,9 @@ export default function App({ engine, config, provider, needsSetup }) {
       {/* scroll indicator when not pinned to the bottom */}
       {!atBottom && (
         <Box paddingLeft={1}>
-          <Text color={theme.faint}>↑ scrolled up {scrollUp} · wheel / PgDn / ctrl+↓ / End to return to latest</Text>
+          <Text color={theme.faint}>
+            ↑ scrolled up{startIdx === 0 ? ' · top' : ` ${clampedScroll} rows`} · wheel / PgDn / ctrl+↓ / End for latest
+          </Text>
         </Box>
       )}
 

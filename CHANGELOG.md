@@ -5,6 +5,33 @@ All notable changes to **termita** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] — 2026-07-06
+
+### Added
+- **`:command` — run a command yourself.** Type a line starting with `:` (e.g.
+  `:ls -la`, `:git status`) to run it **directly** — no model round-trip, no
+  approval gate. The full real output streams into the transcript; the model is
+  then handed the *trimmed* view (head+tail, full copy on disk) so it stays in
+  sync with what actually happened — a `cd`, an install, an edit — without
+  blowing the context. Recalled verbatim with ↑ like any other input.
+- **Interactive full-screen programs via `:`.** `:vim`, `:htop`, `:less`,
+  `:lazygit`, `:man`, a bare `:python`/`:node` REPL, etc. termita **suspends** —
+  leaves the alternate screen, drops mouse capture, restores cooked input — hands
+  the whole terminal to the program (fully interactive, exactly as in your shell),
+  then re-enters and repaints when it exits. Detected by the first bare word; a
+  piped/redirected form (`:git log | cat`) is captured normally instead. The model
+  is told it ran but can't see inside (there's no output to capture).
+
+### Fixed
+- **Transcript scroll "went to the top and bypassed history."** Scrolling was
+  measured in *items*, but items have wildly different heights (a wrapped message
+  vs a one-line output) while the viewport clips by *rows* — so the wheel lurched
+  unevenly and `Home` sliced the list empty, showing just the banner. Scroll is
+  now a **row budget**: each item's height is estimated, the offset is clamped to
+  `total rows − viewport`, and the visible window is walked from the bottom in
+  rows. The wheel now moves evenly, `PgUp`/`PgDn` step a real page, and `Home`
+  lands on the oldest content with the viewport still full.
+
 ## [2.8.0] — 2026-07-05
 
 ### Added
