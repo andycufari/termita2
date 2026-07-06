@@ -5,6 +5,24 @@ All notable changes to **termita** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.7] — 2026-07-05
+
+### Fixed
+- **Double-Esc jump-back picker blinked open then shut.** A straggler Esc byte
+  from the same press hit the picker's own Esc-close path (which had no burst
+  guard) and closed what the press had just opened. Esc inside the picker now
+  routes through the coalescing handler (window widened 40ms→60ms), so a real
+  double-tap opens the picker and it stays. (#esc)
+
+### Changed
+- **Jump-back picker is cyan** (was pink/magenta) — border + title.
+
+### Added
+- **`/mouse [on|off]`** — toggle mouse capture. ON (default) = wheel scrolls the
+  transcript (hold Option/Shift to select text). OFF = native drag-to-select and
+  copy-paste work everywhere; the wheel falls back to the terminal's own
+  scrollback. Persists to config.
+
 ## [2.7.6] — 2026-07-05
 
 ### Changed

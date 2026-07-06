@@ -127,6 +127,15 @@ export async function runSlash(line, ctx) {
       return;
     }
 
+    case 'mouse': {
+      // /mouse            → toggle wheel capture
+      // /mouse on|off     → set explicitly
+      const on = /^(on|1|true|yes)$/i.test(arg);
+      const off = /^(off|0|false|no)$/i.test(arg);
+      ctx.toggleMouse(on ? true : off ? false : undefined);
+      return;
+    }
+
     case 'credits':
     case 'about':
       push({ kind: 'msg', who: 'term', text: '🏴‍☠️ termita 🇦🇷\n@andycufari · 2026\nEnjoy the ride 🏴‍☠️ 🇦🇷' });

@@ -71,6 +71,7 @@ export default function App({ engine, config, provider, needsSetup }) {
   const [reasoning, setReasoning] = useState(config.llm.reasoning);
   const [model, setModel] = useState(config.llm.model);
   const [contextSize, setContextSize] = useState(config.llm.contextSize || 8192);
+  const [mouseCapture, setMouseCapture] = useState(config.ui?.mouseCapture !== false); // wheel-scroll vs native select
   const [status, setStatus] = useState(null);
 
   const [rewind, setRewind] = useState(null); // { points:[{idx,text}], sel } when in jump-back mode
@@ -140,6 +141,7 @@ export default function App({ engine, config, provider, needsSetup }) {
   useMouseWheel(
     useCallback((delta) => scrollBy(delta * 3), [scrollBy]),
     useCallback(() => handleEscapeRef.current(), []),
+    mouseCapture,
   );
 
   // reset the autocomplete highlight whenever the typed command changes
@@ -294,6 +296,7 @@ export default function App({ engine, config, provider, needsSetup }) {
         openModelPicker: () => openModelPicker(),
         setMaxTokens: (n) => doSetMaxTokens(n),
         setContextSize: (n) => doSetContextSize(n),
+        toggleMouse: (v) => doToggleMouse(v),
         showHelp: () => push({ kind: 'help' }),
         openSetup: () => setSetupOpen(true),
         quit: () => exit(),
@@ -341,6 +344,22 @@ export default function App({ engine, config, provider, needsSetup }) {
     saveConfig(config);
     setContextSize(n);
     if (announce) push({ kind: 'notice', text: `context window → ${n.toLocaleString()} tokens`, level: 'ok' });
+  }, [config, push]);
+
+  // Toggle mouse capture: ON = wheel scrolls the transcript; OFF = native
+  // drag-to-select / copy-paste (wheel falls back to terminal scrollback).
+  const doToggleMouse = useCallback((force) => {
+    setMouseCapture((cur) => {
+      const next = typeof force === 'boolean' ? force : !cur;
+      if (!config.ui) config.ui = {};
+      config.ui.mouseCapture = next;
+      saveConfig(config);
+      push({ kind: 'notice', text: next
+        ? 'mouse capture ON — wheel scrolls (hold Option/Shift to select text)'
+        : 'mouse capture OFF — drag to select / copy-paste (wheel uses terminal scrollback)',
+        level: 'ok' });
+      return next;
+    });
   }, [config, push]);
 
   // On startup, ask the server what context length the model actually has loaded
@@ -408,10 +427,12 @@ export default function App({ engine, config, provider, needsSetup }) {
 
     // Coalesce same-tick duplicate Esc events into one (see escBurst above).
     // A single physical press dispatches to several useInput handlers back-to-
-    // back; only the first should drive the state machine. 40ms comfortably
-    // covers one dispatch burst while staying far below any human double-tap.
+    // back (and a straggler Esc byte can trail by a few ms); only the first
+    // should drive the state machine. 60ms covers one dispatch burst while
+    // staying far below any human double-tap (~120ms+ apart). This is also what
+    // stops a just-opened rewind picker from blinking shut on the same press.
     const t = Date.now();
-    if (t - escBurst.current < 40) return;
+    if (t - escBurst.current < 60) return;
     escBurst.current = t;
 
     if (rewindRef.current) { setRewind(null); return; } // esc out of rewind mode
@@ -503,9 +524,12 @@ export default function App({ engine, config, provider, needsSetup }) {
     // rewind (jump-back) picker owns the keyboard while open. The selectable
     // range is points + one trailing "cancel" row (index === points.length),
     // so ↑↓ wrap through N+1 positions and Enter on the last one just closes.
+    // Esc is routed through handleEscape (NOT closed here) so its burst guard
+    // can absorb a straggler Esc byte from the SAME press that just opened the
+    // picker — otherwise the picker blinks open then instantly closes. (#esc)
     if (rewind) {
       const slots = rewind.points.length + 1; // +1 for the cancel row
-      if (key.escape) { setRewind(null); return; }
+      if (key.escape) { handleEscape(); return; }
       if (key.upArrow) { setRewind((r) => ({ ...r, sel: (r.sel - 1 + slots) % slots })); return; }
       if (key.downArrow) { setRewind((r) => ({ ...r, sel: (r.sel + 1) % slots })); return; }
       if (key.return) {
@@ -639,8 +663,8 @@ export default function App({ engine, config, provider, needsSetup }) {
 
       {/* rewind picker (double-Esc): jump back to an earlier message */}
       {rewind ? (
-        <Box flexDirection="column" borderStyle="round" borderColor={theme.accent} paddingX={1} marginBottom={1}>
-          <Text color={theme.accent} bold>↩ jump back to…</Text>
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1} marginBottom={1}>
+          <Text color={theme.brand} bold>↩ jump back to…</Text>
           {rewind.points.map((p, i) => (
             <Text key={p.idx} color={i === rewind.sel ? theme.ok : theme.dim} bold={i === rewind.sel}>
               {i === rewind.sel ? glyphs.bullet : ' '} {p.text.length > 64 ? p.text.slice(0, 64) + '…' : p.text}

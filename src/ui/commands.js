@@ -10,6 +10,7 @@ export const COMMANDS = [
   { name: 'reasoning', usage: '/reasoning on|off',  desc: 'toggle thinking trace', aliases: ['think'] },
   { name: 'maxtokens', usage: '/maxtokens [n]',     desc: 'show / set reply token budget', aliases: ['tokens'] },
   { name: 'context',   usage: '/context [n]',       desc: 'show / set model context window (gauge)', aliases: ['ctx'] },
+  { name: 'mouse',     usage: '/mouse [on|off]',    desc: 'wheel-scroll vs native drag-select/copy', aliases: [] },
   { name: 'auto',      usage: '/auto',              desc: 'toggle auto-approve (or TAB)', aliases: [] },
   { name: 'clear',     usage: '/clear',             desc: 'wipe transcript + history', aliases: ['clean'] },
   { name: 'compact',   usage: '/compact',           desc: 'summarize history, free context', aliases: [] },

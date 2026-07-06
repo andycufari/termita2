@@ -223,8 +223,11 @@ dangerous patterns, which always prompt with a red warning. File writes auto-run
 | `/auto`              | toggle auto-approve (same as TAB)               |
 | `/clean`             | wipe transcript + history (fresh context)       |
 | `/compact`           | summarize history into a note, free context     |
+| `/context [n]`       | show / set the model context window (gauge)     |
+| `/mouse [on\|off]`   | wheel-scroll vs native drag-select / copy       |
 | `/allow`             | list allowlist rules                            |
 | `/websearch [key]`   | set/show Brave web-search key (`off` to clear)  |
+| `/credits`           | who made this                                   |
 | `/quit`              | exit (also Ctrl-C twice)                         |
 
 ### Web search
@@ -240,9 +243,14 @@ cites the URLs it used. Without a key the tool stays hidden from the model.
 termita runs in the alternate screen (no resize ghosting), so it draws its own
 scrollable transcript. Scroll with the **mouse wheel**, `PageUp`/`PageDown`,
 `Ctrl+↑`/`Ctrl+↓`, `Home` (top) / `End` (latest). New output auto-follows the
-bottom until you scroll up. To **select/copy** text, hold a modifier while
-dragging — **Option** on macOS (iTerm2/Terminal.app), **Shift** on most Linux
-terminals — which bypasses mouse capture for a native selection.
+bottom until you scroll up.
+
+To **select/copy** text with the mouse while wheel-scroll is on, hold a modifier
+while dragging — **Option** on macOS (iTerm2/Terminal.app), **Shift** on most
+Linux terminals. Prefer plain drag-to-select? Run **`/mouse off`** to release
+mouse capture (native selection + copy-paste work everywhere; the wheel then uses
+your terminal's own scrollback). **`/mouse on`** brings wheel-scroll back. The
+setting persists.
 
 ---
 

@@ -22,7 +22,7 @@ export const DEFAULT_CONFIG = {
     contextSize: 8192, // model context window, for the token gauge in the footer
     reasoning: false,
   },
-  ui: { theme: 'neon' },
+  ui: { theme: 'neon', mouseCapture: true }, // mouseCapture: wheel-scroll on (off = native drag-select/copy)
   policy: { allowlist: [], autoRunReadOnly: true, autoApprove: false },
   // Web search (Brave). Empty key → the websearch tool stays hidden from the
   // model. Set via `/websearch <key>` or the BRAVE_API_KEY env var.

@@ -43,7 +43,11 @@ function scrub(str) {
 
 // onWheel(delta) — net wheel ticks: + = scroll UP (older), - = DOWN (latest).
 // onEscape() — fired on a lone Esc byte (interrupt a running command).
-export function useMouseWheel(onWheel, onEscape) {
+// enabled — when false, we DON'T capture the mouse (no `1002h`), so the terminal
+//   keeps native drag-to-select / copy-paste. Wheel scroll then falls back to the
+//   terminal's own scrollback. We still wrap read() to catch Esc and scrub any
+//   stray reports, but capture stays off. Toggle with /mouse.
+export function useMouseWheel(onWheel, onEscape, enabled = true) {
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   const { stdout } = useStdout();
 
@@ -51,7 +55,7 @@ export function useMouseWheel(onWheel, onEscape) {
     if (!stdin || !stdout || !isRawModeSupported) return undefined;
     if (typeof stdin.read !== 'function') return undefined;
     setRawMode(true);
-    stdout.write(ENABLE);
+    if (enabled) stdout.write(ENABLE);
 
     // A report can split across two reads (`\x1b[<64;8` then `;23M`); hold the
     // incomplete tail and prepend it to the next chunk so it never leaks.
@@ -97,7 +101,7 @@ export function useMouseWheel(onWheel, onEscape) {
 
     return () => {
       stdin.read = origRead; // restore
-      stdout.write(DISABLE);
+      if (enabled) stdout.write(DISABLE);
     };
-  }, [stdin, stdout, isRawModeSupported, setRawMode, onWheel, onEscape]);
+  }, [stdin, stdout, isRawModeSupported, setRawMode, onWheel, onEscape, enabled]);
 }
