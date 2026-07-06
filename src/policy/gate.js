@@ -113,6 +113,11 @@ export class Gate {
       return { action: 'auto', reason: 'read-only' };
     }
 
+    // memory (save/list/forget a user note) is a safe local write — auto-run.
+    if (toolName === 'memory') {
+      return { action: 'auto', reason: 'memory' };
+    }
+
     const command = toolName === 'shell' ? args.command : `write ${args.path}`;
     const danger = toolName === 'shell' ? dangerHit(args.command) : null;
 

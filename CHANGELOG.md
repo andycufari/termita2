@@ -5,6 +5,22 @@ All notable changes to **termita** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] — 2026-07-05
+
+### Added
+- **User memory.** termita can now remember durable facts you tell it that it
+  can't discover by running a command — preferences, project details, constraints.
+  Say "remember I use pnpm here" and the model distills it to one line and saves
+  it via a new `memory` tool (auto-runs, no approval). Notes are **project-scoped**
+  (tied to the cwd) or **global** (machine-wide), the model's choice, and are
+  injected into the system prompt every turn so it stops re-asking. Stored at
+  `~/.config/termita/memory.json`. It deliberately does NOT save things it can
+  probe (a tool being installed, a service running) — it runs a command for those.
+- **`/memory`** — list / `add [-g] <note>` / `forget <n>` / `clear` by hand.
+- **`/cognito [on|off]`** (alias `/incognito`) — a session privacy blackout:
+  nothing is saved *and* nothing is recalled, so the model runs as if memory were
+  empty. Resets off each launch; the footer shows 🕶️ while it's on.
+
 ## [2.7.7] — 2026-07-05
 
 ### Fixed

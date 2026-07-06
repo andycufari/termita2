@@ -225,10 +225,44 @@ dangerous patterns, which always prompt with a red warning. File writes auto-run
 | `/compact`           | summarize history into a note, free context     |
 | `/context [n]`       | show / set the model context window (gauge)     |
 | `/mouse [on\|off]`   | wheel-scroll vs native drag-select / copy       |
+| `/memory […]`        | show / manage what termita remembers            |
+| `/cognito [on\|off]` | incognito — no memory saved or recalled         |
 | `/allow`             | list allowlist rules                            |
 | `/websearch [key]`   | set/show Brave web-search key (`off` to clear)  |
 | `/credits`           | who made this                                   |
 | `/quit`              | exit (also Ctrl-C twice)                         |
+
+### Memory
+
+termita can remember durable facts you can't discover by running a command — a
+preference, a project detail, a constraint. Just tell it:
+
+```
+you  › remember I use pnpm here and deploy with fly
+term › noted.   → memory: "Uses pnpm; deploys via fly.io"
+```
+
+The model distills what you said into one line and saves it (via a `memory`
+tool, no approval needed). Notes are **project-scoped** by default (tied to the
+current directory) or **global** (machine-wide prefs). Saved notes are shown to
+the model at the top of every turn, so it stops re-asking.
+
+Manage them by hand too:
+
+```
+/memory                 list active notes (global + this project)
+/memory add <note>      save a project note   (add -g for a global one)
+/memory forget <n>      drop note #n
+/memory clear           wipe everything
+```
+
+Stored at `~/.config/termita/memory.json`. termita does **not** auto-save things
+it can probe (whether a tool is installed, a service is running) — it runs a
+command for those.
+
+**Incognito:** `/cognito on` is a session blackout — nothing is saved *and*
+nothing is recalled, so the model runs as if memory were empty. `/cognito off`
+brings it back. Resets to off each launch. The footer shows 🕶️ while it's on.
 
 ### Web search
 

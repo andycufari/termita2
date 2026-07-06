@@ -12,6 +12,7 @@ import {
   CommandMenu, MascotTag,
 } from './ui/components.jsx';
 import { saveConfig } from './config/config.js';
+import { setCognito as memSetCognito } from './config/memory.js';
 import { runSlash } from './slash.js';
 import Setup from './ui/setup.jsx';
 import { useTerminalSize } from './ui/use-terminal-size.js';
@@ -72,6 +73,7 @@ export default function App({ engine, config, provider, needsSetup }) {
   const [model, setModel] = useState(config.llm.model);
   const [contextSize, setContextSize] = useState(config.llm.contextSize || 8192);
   const [mouseCapture, setMouseCapture] = useState(config.ui?.mouseCapture !== false); // wheel-scroll vs native select
+  const [cognito, setCognito] = useState(false); // incognito: memory blackout (session-only)
   const [status, setStatus] = useState(null);
 
   const [rewind, setRewind] = useState(null); // { points:[{idx,text}], sel } when in jump-back mode
@@ -297,6 +299,8 @@ export default function App({ engine, config, provider, needsSetup }) {
         setMaxTokens: (n) => doSetMaxTokens(n),
         setContextSize: (n) => doSetContextSize(n),
         toggleMouse: (v) => doToggleMouse(v),
+        toggleCognito: (v) => doToggleCognito(v),
+        memoryChanged: () => engine.rebuildSystemPrompt(),
         showHelp: () => push({ kind: 'help' }),
         openSetup: () => setSetupOpen(true),
         quit: () => exit(),
@@ -361,6 +365,22 @@ export default function App({ engine, config, provider, needsSetup }) {
       return next;
     });
   }, [config, push]);
+
+  // Toggle incognito (memory blackout, session-only). Flips the memory module's
+  // session flag, mirrors it to React state (footer indicator), and rebuilds the
+  // system prompt so recall turns off/on immediately.
+  const doToggleCognito = useCallback((force) => {
+    setCognito((cur) => {
+      const next = typeof force === 'boolean' ? force : !cur;
+      memSetCognito(next);
+      engine.rebuildSystemPrompt();
+      push({ kind: 'notice', text: next
+        ? '🕶️  incognito ON — nothing saved or recalled from memory this session'
+        : 'incognito OFF — memory active again',
+        level: next ? 'warn' : 'ok' });
+      return next;
+    });
+  }, [engine, push]);
 
   // On startup, ask the server what context length the model actually has loaded
   // and adopt it — so the gauge isn't stuck at the 8k default when LM Studio is
@@ -780,6 +800,7 @@ export default function App({ engine, config, provider, needsSetup }) {
           <Box paddingLeft={1} justifyContent="space-between" flexWrap="wrap">
             <MascotTag version={VERSION} />
             <Text>
+              {cognito && <Text color={theme.warn} bold>🕶️ incognito </Text>}
               {autoApprove && <Text color={theme.warn} bold>AUTO-ACCEPT {glyphs.bolt} </Text>}
               {reasoning && <Text color={theme.faint}>{glyphs.thought} think </Text>}
               <Text color={ctxColor}>ctx {fmtTokens(tokens)}/{fmtTokens(contextSize)} {ctxPct}% </Text>

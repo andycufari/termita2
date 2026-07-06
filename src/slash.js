@@ -1,6 +1,14 @@
 // Slash command handling. Pure-ish: takes the command + a bag of UI callbacks.
 import { glyphs } from './ui/theme.js';
 import { saveConfig } from './config/config.js';
+import {
+  activeNotes as memActiveNotes,
+  addNote as memAddNote,
+  forgetNote as memForgetNote,
+  clearMemory as memClearMemory,
+  setCognito as memSetCognito,
+  isCognito as memIsCognito,
+} from './config/memory.js';
 
 // Mask a secret for display: keep the first 4 + last 4 chars.
 function maskKey(k) {
@@ -124,6 +132,58 @@ export async function runSlash(line, ctx) {
       config.search.braveApiKey = arg;
       saveConfig(config);
       push({ kind: 'notice', text: `Brave key saved ${maskKey(arg)} — web search enabled ${glyphs.check}`, level: 'ok' });
+      return;
+    }
+
+    case 'memory':
+    case 'mem': {
+      // /memory                 → list active notes (global + this project)
+      // /memory add <note>      → save a project note
+      // /memory add -g <note>   → save a global note
+      // /memory forget <n>      → drop note #n
+      // /memory clear           → wipe everything
+      const [sub, ...subRest] = arg.split(/\s+/);
+      const subArg = subRest.join(' ').trim();
+      if (!arg || sub === 'list') {
+        const notes = memActiveNotes();
+        if (!notes.length) { push({ kind: 'notice', text: 'no saved memory — tell termita "remember …" or /memory add <note>', level: 'dim' }); return; }
+        push({ kind: 'msg', who: 'term', text: 'memory:\n' + notes.map((n, i) => `  ${i + 1}. [${n.scope}] ${n.note}`).join('\n') });
+        return;
+      }
+      if (sub === 'add') {
+        let scope = 'project', text = subArg;
+        if (/^-g\b/.test(text) || /^--global\b/.test(text)) { scope = 'global'; text = text.replace(/^(-g|--global)\s*/, ''); }
+        const saved = memAddNote(text, { scope });
+        if (!saved) { push({ kind: 'notice', text: 'nothing to save — /memory add <note>', level: 'warn' }); return; }
+        push({ kind: 'notice', text: `remembered (${saved.scope}): ${saved.note}`, level: 'ok' });
+        ctx.memoryChanged?.();
+        return;
+      }
+      if (sub === 'forget' || sub === 'rm') {
+        const removed = memForgetNote(Number(subArg));
+        push({ kind: 'notice', text: removed ? `forgot: ${removed.note}` : `no note #${subArg}`, level: removed ? 'ok' : 'warn' });
+        if (removed) ctx.memoryChanged?.();
+        return;
+      }
+      if (sub === 'clear' || sub === 'wipe') {
+        const n = memClearMemory({ scope: 'all' });
+        push({ kind: 'notice', text: `memory cleared (${n} note${n === 1 ? '' : 's'})`, level: 'ok' });
+        ctx.memoryChanged?.();
+        return;
+      }
+      push({ kind: 'notice', text: 'usage: /memory · /memory add [-g] <note> · /memory forget <n> · /memory clear', level: 'dim' });
+      return;
+    }
+
+    case 'cognito':
+    case 'incognito': {
+      // Session-only privacy blackout: no save + no recall. /cognito toggles;
+      // /cognito on|off sets explicitly. Routed through the UI so the footer
+      // indicator updates and the system prompt rebuilds (recall flips now).
+      const on = /^(on|1|true|yes)$/i.test(arg);
+      const off = /^(off|0|false|no)$/i.test(arg);
+      const next = on ? true : off ? false : !memIsCognito();
+      ctx.toggleCognito?.(next);
       return;
     }
 

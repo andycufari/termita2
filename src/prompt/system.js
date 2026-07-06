@@ -1,4 +1,5 @@
-// Build the system prompt: static persona + live machine facts.
+// Build the system prompt: static persona + live machine facts + user memory.
+import { activeNotes } from '../config/memory.js';
 
 const PERSONA = `You are termita, a copilot in the user's console. You work alongside the user, not as a silent executor — a partner with hacker vibes. Chill, short, direct.
 
@@ -25,6 +26,11 @@ const PERSONA = `You are termita, a copilot in the user's console. You work alon
   gzip can't seek). For huge/compressed files prefer cheap probes (\`ls -lh\`,
   \`file\`, \`du -sh\`) and TELL the user a full listing will be slow before running it.
 - Never invent output you didn't get from a tool.
+- When the user tells you a durable fact — a preference, a project detail, a
+  constraint ("remember…", "from now on…", "I use X here") — save it with the
+  \`memory\` tool, distilled to one clean sentence. Don't save things you could
+  just check by running a command (is a tool installed, is a service up) — probe
+  those. Anything already in USER MEMORY below is known; don't re-ask.
 
 LANGUAGE: respond in English by default. Only switch languages if the user writes
 to you in another language — then mirror theirs for that reply. A little dry humor
@@ -40,5 +46,16 @@ export function buildSystemPrompt(sys) {
     `- available tools: ${tools}`,
   ].join('\n');
 
-  return `${PERSONA}\n\n${facts}`;
+  // User memory: durable facts the user asked termita to remember (config/memory.js).
+  // Injected fresh each build so a note saved mid-session is live next turn.
+  let memory = '';
+  try {
+    const notes = activeNotes(sys.cwd);
+    if (notes.length) {
+      memory = '\n\nUSER MEMORY (things the user told you to remember — honor these):\n' +
+        notes.map((n) => `- [${n.scope}] ${n.note}`).join('\n');
+    }
+  } catch { /* memory is optional; never block the prompt */ }
+
+  return `${PERSONA}\n\n${facts}${memory}`;
 }

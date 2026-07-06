@@ -12,6 +12,7 @@ import {
 } from '../tools/index.js';
 import { shellState } from '../tools/shell.js';
 import { createProvider } from '../providers/index.js';
+import { buildSystemPrompt } from '../prompt/system.js';
 import { SessionLog } from './log.js';
 
 // No hard cap on tool rounds — every mutating command needs approval and Esc
@@ -45,6 +46,15 @@ export class Engine {
   // change). Rebuilds the provider so a changed provider TYPE takes effect.
   swapProvider(llm) {
     this.provider = createProvider(llm);
+  }
+
+  // Rebuild the system prompt from current machine facts + user memory. Called
+  // after the model saves/forgets a note so the change is live THIS session
+  // (memory is injected by buildSystemPrompt — see prompt/system.js). Refreshes
+  // cwd too, in case the model changed directories.
+  rebuildSystemPrompt() {
+    this.system.cwd = shellState.cwd || this.system.cwd;
+    this.systemPrompt = buildSystemPrompt(this.system);
   }
 
   // Truncate history to just before message[idx] — used by double-Esc rewind so
@@ -241,6 +251,9 @@ export class Engine {
 
       // Execute.
       const result = await this._runTool(decision.toolCall);
+      // If the model just saved/forgot a memory note, rebuild the system prompt
+      // so it's honored on the very next round (not just next launch).
+      if (result.meta?.memoryChanged) this.rebuildSystemPrompt();
       // Shell output is pre-bounded (head+tail) with its full copy on disk; pass
       // the file path so any further clamp still points the model at the full log.
       const forModel = clampForModel(result.output, undefined, result.meta?.fullPath);

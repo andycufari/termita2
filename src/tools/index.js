@@ -2,6 +2,7 @@
 import { runShell } from './shell.js';
 import { readFile, writeFile, grepFiles } from './fs.js';
 import { webSearch } from './websearch.js';
+import { addNote, forgetNote, activeNotes } from '../config/memory.js';
 
 // The websearch schema is added CONDITIONALLY (only when a Brave key is set) so
 // the model never sees a tool it can't use. See toolSchemas() below.
@@ -89,11 +90,29 @@ export const TOOL_SCHEMAS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'memory',
+      description:
+        "Remember a durable fact the user tells you that you can't discover by running a command — a preference (\"prefers pnpm\"), a project fact (\"deploys via fly.io\"), or a constraint (\"never push to main directly\"). Call this when the user says \"remember…\", \"note that…\", \"from now on…\", or states a lasting preference. DISTILL it into one clean sentence — don't store the raw chat. Do NOT use it for things you can just check (whether a tool is installed, a service is running) — run a command for those. Saved memory is shown to you at the top of every turn. Runs without approval.",
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['add', 'list', 'forget'], description: "'add' saves a note, 'list' shows them, 'forget' drops note #index" },
+          note: { type: 'string', description: "for action=add: the distilled fact, one sentence" },
+          scope: { type: 'string', enum: ['global', 'project'], description: "'project' (default) = tied to this directory; 'global' = every session on this machine (use for machine-wide prefs)" },
+          index: { type: 'integer', description: 'for action=forget: the 1-based number from the list' },
+        },
+        required: ['action'],
+      },
+    },
+  },
 ];
 
 export const READ_ONLY_TOOLS = new Set(['read', 'grep', 'websearch']);
 export const MUTATING_TOOLS = new Set(['shell', 'write']);
-export const KNOWN_TOOLS = new Set(['shell', 'read', 'grep', 'write', 'websearch']);
+export const KNOWN_TOOLS = new Set(['shell', 'read', 'grep', 'write', 'websearch', 'memory']);
 
 // Resolve the Brave API key: config.search.braveApiKey wins, else BRAVE_API_KEY
 // env var. Returns '' when neither is set (→ websearch stays hidden).
@@ -147,7 +166,33 @@ export async function executeTool(toolName, args, ctx = {}) {
       return writeFile(args.path, args.content, ctx);
     case 'websearch':
       return webSearch(args.query, { count: args.count, braveApiKey: ctx.braveApiKey, signal: ctx.signal });
+    case 'memory':
+      return runMemory(args, ctx);
     default:
       return { output: `error: unknown tool "${toolName}"`, meta: { error: true } };
   }
+}
+
+// The `memory` tool. Adds/lists/forgets durable user facts. `meta.memoryChanged`
+// tells the engine to rebuild the system prompt so the new note is live THIS turn.
+function runMemory(args, ctx = {}) {
+  const cwd = ctx.cwd || process.cwd();
+  const action = args.action || 'list';
+  if (action === 'add') {
+    const saved = addNote(args.note, { scope: args.scope === 'global' ? 'global' : 'project', cwd });
+    if (!saved) return { output: 'nothing to remember (empty note)', meta: { error: true } };
+    if (saved.cognito) return { output: 'incognito is on (/cognito) — not saved to memory', meta: {} };
+    const verb = saved.added ? 'remembered' : 'already knew that';
+    return { output: `${verb} (${saved.scope}): ${saved.note}`, meta: { memoryChanged: saved.added } };
+  }
+  if (action === 'forget') {
+    const removed = forgetNote(Number(args.index), cwd);
+    if (!removed) return { output: `no note #${args.index} to forget`, meta: {} };
+    return { output: `forgot: ${removed.note}`, meta: { memoryChanged: true } };
+  }
+  // list
+  const notes = activeNotes(cwd);
+  if (!notes.length) return { output: 'no saved memory yet', meta: {} };
+  const body = notes.map((n, i) => `${i + 1}. [${n.scope}] ${n.note}`).join('\n');
+  return { output: body, meta: {} };
 }
