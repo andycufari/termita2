@@ -834,7 +834,13 @@ function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, se
   };
 
   if (disabled) return <Text color={theme.faint}>{value || '(running… esc to stop)'}</Text>;
-  return <TextInput value={value} onChange={onChange} onSubmit={handleSubmit} />;
+  // Wrap in an explicit whitish color so typed text doesn't inherit the
+  // terminal's default foreground (which is green in some terminal themes).
+  return (
+    <Text color={theme.text}>
+      <TextInput value={value} onChange={onChange} onSubmit={handleSubmit} />
+    </Text>
+  );
 }
 
 // Rough token estimate: ~4 chars/token across all message content.

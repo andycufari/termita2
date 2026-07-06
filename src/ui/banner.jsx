@@ -41,19 +41,14 @@ const TERMITA_ART = [
 function BigBanner({ version }) {
   return (
     <Box flexDirection="column" marginBottom={1} paddingX={1}>
-      <Box marginBottom={1}>
-        <Text>
-          <Text>🏴‍☠️  </Text>
-          <Text color={theme.brand} bold>TERMITA</Text>
-          <Text>  🇦🇷</Text>
-          <Text color={theme.dim}>   v{version}</Text>
-        </Text>
-      </Box>
       {TERMITA_ART.map((row, i) => (
-        <Text key={i} color={theme.brand} bold>{row}</Text>
+        <Text key={i} color={theme.brand} bold>
+          {row}
+          {i === TERMITA_ART.length - 1 ? <Text color={theme.dim} bold={false}>  v{version}</Text> : null}
+        </Text>
       ))}
       <Box marginTop={1}>
-        <Text color={theme.text}>Local AI first copilot for your console</Text>
+        <Text color={theme.text}>🏴‍☠️  Local AI first copilot for your console  🇦🇷</Text>
       </Box>
       <Text color={theme.faint}>/help for commands · tab = auto-approve · esc = interrupt</Text>
     </Box>
@@ -65,12 +60,10 @@ function CompactBanner({ version }) {
   return (
     <Box flexDirection="column" marginBottom={1} paddingX={1}>
       <Text>
-        <Text>🏴‍☠️  </Text>
         <Text color={theme.brand} bold>TERMITA</Text>
-        <Text>  🇦🇷</Text>
         {version ? <Text color={theme.faint}>  v{version}</Text> : null}
       </Text>
-      <Text color={theme.text}>  Local AI first copilot for your console</Text>
+      <Text color={theme.text}>🏴‍☠️  Local AI first copilot for your console  🇦🇷</Text>
       <Text color={theme.faint}>  /help for commands · tab = auto-approve · esc = interrupt</Text>
     </Box>
   );

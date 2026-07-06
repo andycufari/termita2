@@ -5,6 +5,17 @@ All notable changes to **termita** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.6] — 2026-07-05
+
+### Changed
+- **Banner cleanup** — removed the duplicate text "TERMITA" that sat above the
+  ASCII art; the version now trails the art, and the pirate 🏴‍☠️ / Argentina 🇦🇷
+  flags flank the "Local AI first copilot for your console" line.
+- **Input text is whitish** — the typed input is now wrapped in an explicit color
+  so it no longer inherits the terminal's default foreground (green in some
+  terminal themes).
+- **`/` command menu highlight is cyan** (was pink/magenta).
+
 ## [2.7.5] — 2026-07-05
 
 ### Changed

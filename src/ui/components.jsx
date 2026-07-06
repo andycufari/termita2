@@ -227,7 +227,7 @@ export function CommandMenu({ matches, selected, width }) {
           const line = `${m.usage.padEnd(usageW)}${m.desc}`;
           const clamped = width && line.length > width - 8 ? line.slice(0, width - 9) + '…' : line;
           return (
-            <Text key={m.name} color={active ? theme.accent : theme.dim} bold={active}>
+            <Text key={m.name} color={active ? theme.brand : theme.dim} bold={active}>
               {active ? glyphs.bullet : ' '} {clamped}
             </Text>
           );
