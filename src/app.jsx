@@ -324,9 +324,12 @@ export default function App({ engine, config, provider, needsSetup }) {
   // child attached to the terminal, then re-enter the alt screen and force Ink to
   // repaint. Mirrors how git/less shell out to $EDITOR. (see tools/interactive.js)
   const suspendRunner = useCallback(async (cmd, opts) => {
-    // 1) release termita's grip on the terminal
+    // 1) release termita's grip on the terminal. Leave the alt-screen back to the
+    // normal buffer and clear it, so the child (or a plain `!ls`) starts on a
+    // clean screen and any last Ink frame from this same tick is wiped.
     try { stdout.write('\x1b[?1006l\x1b[?1002l'); } catch { /* mouse off */ }
     try { stdout.write('\x1b[?1049l'); } catch { /* leave alt-screen */ }
+    try { stdout.write('\x1b[2J\x1b[H'); } catch { /* clear the normal buffer */ }
     try { if (typeof setRawMode === 'function') setRawMode(false); } catch { /* cooked */ }
     if (stdin?.isPaused && !stdin.isPaused()) { try { stdin.pause(); } catch { /* ok */ } }
 
@@ -352,15 +355,16 @@ export default function App({ engine, config, provider, needsSetup }) {
     setInput('');
     if (!text) return;
 
-    // `:cmd` — run a command directly (no model, no approval). You see the full
-    // real output; the model is told the trimmed version afterward so it stays in
-    // sync. Full-screen programs suspend termita and take the terminal. (#direct)
-    if (text.startsWith(':') && text.length > 1) {
+    // `!cmd` — run a command yourself, in the REAL terminal (no model, no
+    // approval). termita suspends, hands off the TTY (vim, a REPL, plain ls —
+    // anything works, fully interactive), then redraws. The model is told you ran
+    // it; output isn't captured (the child owned the screen). cwd sticks. (#direct)
+    if (text.startsWith('!') && text.length > 1) {
       const cmd = text.slice(1).trim();
       if (!cmd) return;
       inputHistory.current.unshift(text);
       histIdx.current = -1;
-      if (busy) { push({ kind: 'notice', text: 'busy — wait for the current turn (esc to stop), then run your `:` command', level: 'warn' }); return; }
+      if (busy) { push({ kind: 'notice', text: 'busy — wait for the current turn (esc to stop), then run your `!` command', level: 'warn' }); return; }
       setBusy(true);
       setBusyAt(Date.now());
       engine.runDirect(cmd, { suspendRunner });

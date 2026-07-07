@@ -212,24 +212,26 @@ dangerous patterns, which always prompt with a red warning. File writes auto-run
 
 **Esc** interrupts anything: a streaming reply, a running command, or a prompt.
 
-### Run a command yourself — `:`
+### Run a command yourself — `!`
 
-Type a line starting with `:` to run a command **directly** — no model round-trip,
-no approval prompt. You see the full, real output stream in; the model is then
-handed the *trimmed* version so it stays in sync with what happened (a `cd`, an
-install, a config edit) without blowing the context.
+Type a line starting with `!` to run a command **yourself**, in the real terminal —
+no model round-trip, no approval prompt. termita **suspends**, hands the whole
+terminal to the command, then redraws itself when it exits. Because it's the real
+terminal, *anything* works and is fully interactive — exactly as if you'd typed it
+in your shell:
 
 ```
-you  › :ls -la
-      (full output streams in)
-you  › :git status
+you  › !ls -la
+you  › !vim notes.txt      # your editor, full-screen
+you  › !git commit         # opens $EDITOR, prompts work
+you  › !htop               # live TUI
+you  › !python             # drop into a REPL, then exit back to termita
+you  › !cd ../other-repo   # sticks — termita follows you there
 ```
 
-Full-screen programs work too. `:vim notes.txt`, `:htop`, `:less big.log`,
-`:lazygit` — termita **suspends**, hands the whole terminal to the program (so
-it's fully interactive, exactly as if you'd typed it in your shell), and redraws
-itself when you quit. The model can't see inside those (there's no output to
-capture) — it's just told you ran it.
+The command owns the screen while it runs, so termita doesn't capture its output —
+the model is simply told you ran it (and picks up any directory change). It's the
+terminal, with termita waiting for you to come back.
 
 ### Slash commands
 

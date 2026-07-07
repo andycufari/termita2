@@ -8,19 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.9.0] — 2026-07-06
 
 ### Added
-- **`:command` — run a command yourself.** Type a line starting with `:` (e.g.
-  `:ls -la`, `:git status`) to run it **directly** — no model round-trip, no
-  approval gate. The full real output streams into the transcript; the model is
-  then handed the *trimmed* view (head+tail, full copy on disk) so it stays in
-  sync with what actually happened — a `cd`, an install, an edit — without
-  blowing the context. Recalled verbatim with ↑ like any other input.
-- **Interactive full-screen programs via `:`.** `:vim`, `:htop`, `:less`,
-  `:lazygit`, `:man`, a bare `:python`/`:node` REPL, etc. termita **suspends** —
-  leaves the alternate screen, drops mouse capture, restores cooked input — hands
-  the whole terminal to the program (fully interactive, exactly as in your shell),
-  then re-enters and repaints when it exits. Detected by the first bare word; a
-  piped/redirected form (`:git log | cat`) is captured normally instead. The model
-  is told it ran but can't see inside (there's no output to capture).
+- **`!command` — run it yourself in the terminal.** Type a line starting with `!`
+  (e.g. `!ls -la`, `!vim notes.txt`, `!git commit`, `!htop`, `!python`) to run it
+  **yourself** — no model round-trip, no approval gate. termita **suspends** (leaves
+  the alternate screen, drops mouse capture, restores cooked input), hands the whole
+  terminal to the command, then re-enters and repaints when it exits. Because it's
+  the real terminal, *anything* works and is fully interactive — editors, REPLs,
+  `$EDITOR` prompts, password prompts, live TUIs — exactly as in your shell. No
+  allowlist, no guessing which commands are interactive: `!` always hands off. The
+  command owns the screen, so output isn't captured; the model is told you ran it.
+  A `!cd` sticks — the working directory is recovered out-of-band (fd 3) so termita
+  and the model follow you. Recalled verbatim with ↑ like any input.
 
 ### Fixed
 - **Transcript scroll "went to the top and bypassed history."** Scrolling was

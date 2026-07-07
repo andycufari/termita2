@@ -1,74 +1,69 @@
-// Detecting + running full-screen interactive programs (vim, htop, less…).
+// Running a command the USER typed directly (the `!cmd` escape hatch).
 //
 // termita owns the terminal: it's in the ALTERNATE SCREEN with stdin in RAW mode
-// and mouse capture on. A full-screen program needs those exact same things — it
-// wants the real TTY as its stdin/stdout, the alt screen, and raw keystrokes.
-// There's no way to host one inside an Ink layout (Ink paints text; it can't
-// embed a live PTY). So for these we SUSPEND: tear termita's screen down, hand
-// the real terminal to the child, and redraw termita when the child exits. This
-// is exactly how git/less/fzf shell out to $EDITOR.
+// and mouse capture on. A `!` command ALWAYS gets the real terminal — we don't
+// guess whether it's interactive. termita suspends (tears its screen down), the
+// child runs attached to the TTY (so vim, an editor prompt, htop, a REPL, plain
+// `ls` — anything — behaves exactly as in your shell), then termita redraws. This
+// is how git/less shell out to $EDITOR. Because the child owns stdout, we DON'T
+// capture its output; the model is just told the command ran.
+//
+// cwd still tracks: we can't capture 1/2 (the child needs them), but we CAN keep
+// fd 3 for ourselves and have the wrapper print $PWD there after the command —
+// so `!cd /foo` persists into the session just like the model's shell tool does.
 import { spawn } from 'node:child_process';
 
-// Programs that take over the whole screen (they need the TTY; capturing their
-// output is meaningless). Matched on the FIRST bare word of a command — a
-// pipeline or one with redirection (`git log | cat`, `vim x > y`) is treated as
-// normal (non-interactive), since the user clearly isn't running it full-screen.
-const FULLSCREEN = new Set([
-  'vim', 'vi', 'nvim', 'neovim', 'nano', 'pico', 'emacs', 'emacsclient',
-  'helix', 'hx', 'kak', 'micro', 'joe', 'ne',
-  'less', 'more', 'most',
-  'top', 'htop', 'btop', 'atop', 'glances', 'gtop', 'bpytop',
-  'man', 'tig', 'lazygit', 'gitui', 'lazydocker', 'k9s',
-  'ncdu', 'ranger', 'nnn', 'lf', 'vifm', 'mc', 'yazi',
-  'watch', 'fzf', 'sk', 'ssh', 'mosh', 'tmux', 'screen',
-  'nmtui', 'nethack', 'vit', 'calcurse', 'cmus', 'ncmpcpp',
-  'python', 'python3', 'ipython', 'node', 'irb', 'ghci', 'sqlite3', 'psql', 'mysql', 'redis-cli',
-]);
-
-// Some pagers/editors are safe when clearly non-interactive (piped/redirected);
-// if the command contains a pipe, redirect, or command separator we DON'T treat
-// it as full-screen — it isn't running as a TUI.
-const NON_TTY_HINT = /[|<>]|&&|;|\bcat\b\s*$/;
-
-// Is this direct command a full-screen program we should suspend-and-hand-off?
-export function isInteractive(command) {
-  const cmd = String(command || '').trim();
-  if (!cmd) return false;
-  if (NON_TTY_HINT.test(cmd)) return false; // piped/redirected → capture normally
-  const first = cmd.split(/\s+/)[0];
-  const base = first.replace(/.*\//, ''); // strip any path prefix
-  // bare REPL only (e.g. `python` with no script arg) is interactive; `python x.py` isn't
-  if (['python', 'python3', 'node'].includes(base)) {
-    return cmd.split(/\s+/).length === 1;
-  }
-  return FULLSCREEN.has(base);
-}
-
-// Run a command attached to the REAL terminal (inherited stdio), after the caller
-// has torn termita's screen down. Resolves when the child exits. `signal` aborts
-// it (Esc). Returns { exitCode } — output isn't captured (it went to the TTY).
+// Run `command` attached to the real terminal, after the caller has torn
+// termita's screen down. stdin/stdout/stderr inherit the TTY; fd 3 is captured so
+// the resulting $PWD comes back out-of-band (never mixed into the child's screen).
+// Resolves { exitCode, cwd } when the child exits. `signal` forwards Ctrl-C.
 export function runInteractive(command, { cwd, signal } = {}) {
+  // Run the user's command, then emit $PWD on fd 3 (captured), preserving its rc.
+  const wrapped = `${command}\n__rc=$?\nprintf '%s' "$PWD" >&3 2>/dev/null\nexit $__rc`;
+
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn('sh', ['-c', command], {
+      child = spawn('sh', ['-c', wrapped], {
         cwd,
         env: { ...process.env, TERM: process.env.TERM || 'xterm-256color' },
-        stdio: 'inherit', // child owns the real TTY: keyboard + screen
+        // 0/1/2 inherit the real TTY (full interactivity); 3 = pwd, captured.
+        // NOT detached: the child must stay in termita's process group so it's the
+        // TTY's FOREGROUND group — otherwise a program that reads stdin (vim, a
+        // REPL) gets SIGTTIN-stopped. Interactive input working matters more than
+        // reaping a stray grandchild on the rare mid-hand-off abort (see onAbort).
+        stdio: ['inherit', 'inherit', 'inherit', 'pipe'],
       });
     } catch (err) {
       resolve({ exitCode: null, error: err.message });
       return;
     }
-    const onAbort = () => { try { child.kill('SIGINT'); } catch { /* gone */ } };
+
+    let pwdOut = '';
+    if (child.stdio[3]) child.stdio[3].on('data', (b) => { pwdOut += b.toString(); });
+
+    // Abort: SIGINT first (Ctrl-C — lets a TUI like vim/less clean up its screen),
+    // then SIGKILL shortly after if it ignored it. The child shares termita's
+    // group (see spawn), so we can't group-kill without also hitting ourselves;
+    // we signal the child directly. A deep grandchild (`sh -c "sleep"`) may
+    // outlive SIGKILL of the wrapper, but abort mid-hand-off is rare — you
+    // normally just quit the program — and this keeps interactive input correct.
+    let killTimer = null;
+    const onAbort = () => {
+      try { child.kill('SIGINT'); } catch { /* gone */ }
+      killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, 300);
+    };
     if (signal) {
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });
     }
-    child.on('error', (err) => resolve({ exitCode: null, error: err.message }));
-    child.on('close', (code) => {
+    child.on('error', (err) => { if (killTimer) clearTimeout(killTimer); resolve({ exitCode: null, error: err.message }); });
+    child.on('close', (code, sig) => {
+      if (killTimer) clearTimeout(killTimer);
       if (signal) signal.removeEventListener?.('abort', onAbort);
-      resolve({ exitCode: code });
+      const np = pwdOut.trim();
+      // A signalled death (aborted) has code === null; surface that as non-zero.
+      resolve({ exitCode: code == null && sig ? 130 : code, cwd: np || null });
     });
   });
 }

@@ -10,8 +10,7 @@ import {
   toolSchemas,
   braveKey,
 } from '../tools/index.js';
-import { runShell, shellState } from '../tools/shell.js';
-import { isInteractive } from '../tools/interactive.js';
+import { shellState } from '../tools/shell.js';
 import { createProvider } from '../providers/index.js';
 import { buildSystemPrompt } from '../prompt/system.js';
 import { SessionLog } from './log.js';
@@ -34,7 +33,6 @@ export class Engine {
     this.history = []; // OpenAI-format messages (no system; that's separate)
     this.busy = false;
     this.abort = null; // current AbortController
-    this._directSeq = 0; // ids for user-run `:cmd` (distinct from model tool ids)
 
     // pending approval: { resolve, toolCall }
     this._pendingDecision = null;
@@ -139,59 +137,34 @@ export class Engine {
     return result;
   }
 
-  // Run a command the USER typed directly (the `:cmd` escape hatch) — NOT
-  // proposed by the model, no approval gate. The user sees the full real output
-  // stream in (same events as a tool run, so it renders identically); the model
-  // is then told "the user ran <cmd>" with the TRIMMED output, so it stays in
-  // sync with reality (a cd, an install, etc.) without us blowing the context.
-  //
-  // Full-screen programs (vim, htop, less…) can't be captured — they need the
-  // real TTY. For those we call `suspendRunner`, which the UI supplies: it tears
-  // termita's screen down, runs the child attached to the terminal, and redraws.
-  // We record only that it happened (no output to capture). See interactive.js.
+  // Run a command the USER typed directly (the `!cmd` escape hatch) — NOT proposed
+  // by the model, no approval gate. `!` ALWAYS hands off the real terminal: we
+  // don't guess whether it's interactive. `suspendRunner` (supplied by the UI)
+  // tears termita's screen down, runs the child attached to the TTY — so vim, a
+  // REPL, `git commit`'s editor, a password prompt, plain `ls`, anything behaves
+  // exactly as in your shell — then redraws termita. The child owns stdout, so we
+  // DON'T capture output; the model is just told the command ran. cwd still tracks
+  // (fd 3 → $PWD), so `!cd /foo` persists into the session. See interactive.js.
   async runDirect(command, { suspendRunner } = {}) {
     const cmd = String(command || '').trim();
-    if (!cmd || this.busy) return;
+    if (!cmd || this.busy || typeof suspendRunner !== 'function') return;
     this.busy = true;
     this.abort = new AbortController();
-    const id = `usr-${++this._directSeq}`;
 
     try {
-      // Interactive full-screen program → hand the terminal off, don't capture.
-      if (isInteractive(cmd) && typeof suspendRunner === 'function') {
-        this.log.command(`:${cmd}`, 'user ran directly (interactive)');
-        const res = await suspendRunner(cmd, { cwd: shellState.cwd, signal: this.abort.signal });
-        // The child may have cd'd via a wrapper, but an inherited-stdio child
-        // can't report $PWD back; leave cwd as-is. Record it for the model.
-        const note = `The user ran an interactive program directly: \`${cmd}\`` +
-          (res?.exitCode != null ? ` (exited ${res.exitCode}).` : '.') +
-          ' Its screen output was not captured (it owned the terminal).';
-        this.history.push({ role: 'user', content: note });
-        this.events.emit(EVENTS.NOTICE, { text: `ran \`${cmd}\` — back to termita`, level: 'dim' });
-        return;
-      }
+      this.log.command(`!${cmd}`, 'user ran directly');
+      const res = await suspendRunner(cmd, { cwd: shellState.cwd, signal: this.abort.signal });
 
-      // Normal command: stream it live, keep full output on disk, feed trimmed to model.
-      this.events.emit(EVENTS.TOOL_PROPOSED, { id, name: 'shell', args: { command: cmd, why: 'you ran this directly' }, gate: null });
-      this.events.emit(EVENTS.TOOL_RUNNING, { id });
-      const outFile = this.log.outFilePath(id);
-      this.log.command(`:${cmd}`, 'user ran directly');
-      const result = await runShell(cmd, {
-        cwd: shellState.cwd,
-        signal: this.abort.signal,
-        onChunk: (chunk) => this.events.emit(EVENTS.TOOL_OUTPUT, { id, chunk }),
-        onFull: outFile ? (chunk) => { this.log.appendOutput(outFile, chunk); return outFile; } : null,
-      });
-      this.log.output(result.output, result.meta?.exitCode);
-      this.events.emit(EVENTS.TOOL_DONE, { id, output: result.output, meta: result.meta });
-
-      // cwd may have changed (`:cd ..`) — reflect it in the prompt for the model.
+      // Adopt the child's final $PWD (out-of-band via fd 3) so a `!cd` sticks, and
+      // refresh the system prompt so the model knows where we are now.
+      if (res?.cwd) shellState.cwd = res.cwd;
       this.rebuildSystemPrompt();
-      const forModel = clampForModel(result.output, undefined, result.meta?.fullPath);
-      this.history.push({
-        role: 'user',
-        content: `[I ran this directly in my shell — not a step you proposed]\n$ ${cmd}\n${forModel || '(no output)'}`,
-      });
+
+      // Tell the model it happened (no output to capture — the child owned the TTY).
+      const note = `[I ran this directly in my terminal — not a step you proposed]\n$ ${cmd}` +
+        (res?.exitCode != null ? `\n(exited ${res.exitCode}; output went to my screen, not captured)` : '\n(output went to my screen, not captured)');
+      this.history.push({ role: 'user', content: note });
+      this.events.emit(EVENTS.NOTICE, { text: `ran \`${cmd}\` — back to termita`, level: 'dim' });
     } catch (err) {
       if (err.name !== 'AbortError') this.events.emit(EVENTS.ERROR, { message: err.message, kind: err.kind });
     } finally {
