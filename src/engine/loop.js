@@ -138,16 +138,19 @@ export class Engine {
   }
 
   // Run a command the USER typed directly (the `!cmd` escape hatch) — NOT proposed
-  // by the model, no approval gate. `!` ALWAYS hands off the real terminal: we
-  // don't guess whether it's interactive. `suspendRunner` (supplied by the UI)
-  // tears termita's screen down, runs the child attached to the TTY — so vim, a
-  // REPL, `git commit`'s editor, a password prompt, plain `ls`, anything behaves
-  // exactly as in your shell — then redraws termita. The child owns stdout, so we
-  // DON'T capture output; the model is just told the command ran. cwd still tracks
-  // (fd 3 → $PWD), so `!cd /foo` persists into the session. See interactive.js.
+  // by the model, no approval gate. `suspendRunner` (supplied by the UI) tears
+  // termita's screen down, runs the command on the REAL terminal (fully
+  // interactive — vim, tail -f, a REPL, plain ls), shows a pause menu on exit, and
+  // returns the user's choice about what the model should hear. See interactive.js.
+  //
+  // We DON'T push history here. The choice becomes a *staged* context the UI puts
+  // in front of the input so the user can add a comment; command-context + comment
+  // are then sent together as one user turn (see app.jsx). Returns:
+  //   { staged: string|null }  — text to seed the next turn, or null (silent 'E').
+  // cwd tracks via fd 3 so `!cd` sticks; the system prompt is refreshed.
   async runDirect(command, { suspendRunner } = {}) {
     const cmd = String(command || '').trim();
-    if (!cmd || this.busy || typeof suspendRunner !== 'function') return;
+    if (!cmd || this.busy || typeof suspendRunner !== 'function') return { staged: null };
     this.busy = true;
     this.abort = new AbortController();
 
@@ -155,18 +158,28 @@ export class Engine {
       this.log.command(`!${cmd}`, 'user ran directly');
       const res = await suspendRunner(cmd, { cwd: shellState.cwd, signal: this.abort.signal });
 
-      // Adopt the child's final $PWD (out-of-band via fd 3) so a `!cd` sticks, and
-      // refresh the system prompt so the model knows where we are now.
+      // Adopt the child's final $PWD so a `!cd` sticks; refresh the prompt.
       if (res?.cwd) shellState.cwd = res.cwd;
       this.rebuildSystemPrompt();
 
-      // Tell the model it happened (no output to capture — the child owned the TTY).
-      const note = `[I ran this directly in my terminal — not a step you proposed]\n$ ${cmd}` +
-        (res?.exitCode != null ? `\n(exited ${res.exitCode}; output went to my screen, not captured)` : '\n(output went to my screen, not captured)');
-      this.history.push({ role: 'user', content: note });
-      this.events.emit(EVENTS.NOTICE, { text: `ran \`${cmd}\` — back to termita`, level: 'dim' });
+      const choice = res?.choice || 'empty';
+      const codeNote = res?.exitCode != null ? ` (exit ${res.exitCode})` : '';
+      let staged = null;
+      if (choice === 'full' && res?.output) {
+        const trimmed = clampForModel(res.output, undefined, res.outFile);
+        staged = `[I ran this directly in my terminal — not a step you proposed]\n$ ${cmd}${codeNote}\n${trimmed || '(no output)'}`;
+      } else if (choice === 'enter') {
+        staged = `[I ran this directly in my terminal — not a step you proposed]\n$ ${cmd}${codeNote}\n(output stayed on my screen — ask if you need it)`;
+      } // 'empty' → staged stays null (model told nothing)
+
+      this.events.emit(EVENTS.NOTICE, {
+        text: choice === 'empty' ? `ran \`${cmd}\` (private)` : `ran \`${cmd}\` — add a note or press enter to share`,
+        level: 'dim',
+      });
+      return { staged };
     } catch (err) {
       if (err.name !== 'AbortError') this.events.emit(EVENTS.ERROR, { message: err.message, kind: err.kind });
+      return { staged: null };
     } finally {
       this.busy = false;
       this.abort = null;

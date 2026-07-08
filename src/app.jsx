@@ -13,7 +13,7 @@ import {
 } from './ui/components.jsx';
 import { saveConfig } from './config/config.js';
 import { setCognito as memSetCognito } from './config/memory.js';
-import { runInteractive } from './tools/interactive.js';
+import { runDirectProcess, isInteractive, pauseMenu } from './tools/interactive.js';
 import { runSlash } from './slash.js';
 import Setup from './ui/setup.jsx';
 import { useTerminalSize } from './ui/use-terminal-size.js';
@@ -111,6 +111,7 @@ export default function App({ engine, config, provider, needsSetup }) {
   const [cognito, setCognito] = useState(false); // incognito: memory blackout (session-only)
   const [status, setStatus] = useState(null);
   const [repaint, setRepaint] = useState(0); // bump to force a full redraw after suspend/hand-off
+  const [pendingShare, setPendingShare] = useState(null); // staged `!cmd` context awaiting a comment
 
   const [rewind, setRewind] = useState(null); // { points:[{idx,text}], sel } when in jump-back mode
   const [cmdSel, setCmdSel] = useState(0); // highlighted item in the `/` autocomplete
@@ -318,56 +319,82 @@ export default function App({ engine, config, provider, needsSetup }) {
     return off;
   }, [engine, push, patchItem, config.llm.endpoint]);
 
-  // Suspend termita and hand the real terminal to a full-screen program (vim,
-  // htop, less…). We can't host it inside the Ink tree — it needs the TTY — so we
-  // leave the alternate screen, drop mouse capture, restore cooked input, run the
-  // child attached to the terminal, then re-enter the alt screen and force Ink to
-  // repaint. Mirrors how git/less shell out to $EDITOR. (see tools/interactive.js)
+  // Suspend termita and run a `!` command on the REAL terminal, then a pause menu.
+  // We leave the alt-screen, drop mouse capture, restore cooked input, run the
+  // command (TTY mode for a full-screen program so vim/tail-f work; pipe+tee mode
+  // for a plain command so its output can be captured for the model), show the
+  // exit menu, read one key, then re-enter the alt-screen and repaint. `force`
+  // (from `!!`) pins TTY mode for a program the heuristic didn't recognize.
   const suspendRunner = useCallback(async (cmd, opts) => {
+    const tty = opts?.forceTty || isInteractive(cmd);
+    const outFile = tty ? null : (engine.log?.outFilePath?.(`bang-${Date.now().toString(36)}`) || null);
+
     // 1) release termita's grip on the terminal. Leave the alt-screen back to the
-    // normal buffer and clear it, so the child (or a plain `!ls`) starts on a
-    // clean screen and any last Ink frame from this same tick is wiped.
+    // normal buffer and clear it so the command starts on a clean screen.
     try { stdout.write('\x1b[?1006l\x1b[?1002l'); } catch { /* mouse off */ }
     try { stdout.write('\x1b[?1049l'); } catch { /* leave alt-screen */ }
     try { stdout.write('\x1b[2J\x1b[H'); } catch { /* clear the normal buffer */ }
     try { if (typeof setRawMode === 'function') setRawMode(false); } catch { /* cooked */ }
     if (stdin?.isPaused && !stdin.isPaused()) { try { stdin.pause(); } catch { /* ok */ } }
 
-    let res;
+    let res = {};
     try {
-      res = await runInteractive(cmd, opts);
+      res = await runDirectProcess(cmd, { ...opts, tty, outFile });
+      // 2) pause on the real terminal: let the user read the output + decide what
+      // the model hears. (skipped if the run was aborted before it produced a code)
+      const hasOutput = !tty && !!(res.output && res.output.trim());
+      res.choice = await pauseMenu(cmd, res.exitCode, { hasOutput });
     } finally {
-      // 2) reclaim it and force a full repaint of our UI
+      // 3) reclaim the terminal and force a full repaint of our UI
       try { if (typeof setRawMode === 'function') setRawMode(true); } catch { /* raw */ }
       try { stdin?.resume?.(); } catch { /* ok */ }
       try { stdout.write('\x1b[?1049h'); } catch { /* re-enter alt-screen */ }
       if (mouseCaptureRef.current) { try { stdout.write('\x1b[?1002h\x1b[?1006h'); } catch { /* mouse on */ } }
       try { stdout.write('\x1b[2J\x1b[H'); } catch { /* clear */ }
-      // nudge Ink to redraw the whole tree on the fresh screen
-      setRepaint((n) => n + 1);
+      setRepaint((n) => n + 1); // nudge Ink to redraw the whole tree
     }
     return res;
-  }, [stdout, stdin, setRawMode]);
+  }, [stdout, stdin, setRawMode, engine]);
 
   // --- Submit a user line ---------------------------------------------------
   const submit = useCallback(async (raw) => {
     const text = raw.trim();
     setInput('');
+
+    // A `!cmd` share is staged: this line is the user's comment on it (which MAY
+    // be empty — Enter alone shares the staged context with no note). Handle it
+    // BEFORE the empty-guard so a bare Enter still sends. (#direct)
+    if (pendingShare) {
+      const share = pendingShare;
+      setPendingShare(null);
+      const content = text ? `${share.context}\n\nMy note: ${text}` : share.context;
+      push({ kind: 'msg', who: 'you', text: text || `(shared: !${share.cmd})` });
+      setBusy(true);
+      setBusyAt(Date.now());
+      engine.send(content);
+      return;
+    }
+
     if (!text) return;
 
-    // `!cmd` — run a command yourself, in the REAL terminal (no model, no
-    // approval). termita suspends, hands off the TTY (vim, a REPL, plain ls —
-    // anything works, fully interactive), then redraws. The model is told you ran
-    // it; output isn't captured (the child owned the screen). cwd sticks. (#direct)
+    // `!cmd` — run a command yourself on the REAL terminal (no model, no approval).
+    // termita suspends, runs it fully interactive (vim, tail -f, plain ls), shows
+    // a pause menu on exit so you read the output + choose what the model hears,
+    // then returns you here with that context STAGED for an optional comment.
+    // `!!cmd` forces full-terminal mode for a program the heuristic missed. (#direct)
     if (text.startsWith('!') && text.length > 1) {
-      const cmd = text.slice(1).trim();
+      const forceTty = text.startsWith('!!');
+      const cmd = text.slice(forceTty ? 2 : 1).trim();
       if (!cmd) return;
       inputHistory.current.unshift(text);
       histIdx.current = -1;
       if (busy) { push({ kind: 'notice', text: 'busy — wait for the current turn (esc to stop), then run your `!` command', level: 'warn' }); return; }
       setBusy(true);
       setBusyAt(Date.now());
-      engine.runDirect(cmd, { suspendRunner });
+      const { staged } = await engine.runDirect(cmd, { suspendRunner: (c, o) => suspendRunner(c, { ...o, forceTty }) });
+      // Enter/Full → stage the context and drop the user in the input to comment.
+      // Empty → staged is null, nothing to share, clean input. (busy cleared by TURN_DONE)
+      if (staged) { setPendingShare({ cmd, context: staged }); }
       return;
     }
 
@@ -407,7 +434,7 @@ export default function App({ engine, config, provider, needsSetup }) {
     setBusy(true);
     setBusyAt(Date.now());
     engine.send(text);
-  }, [engine, config, provider, push, exit, busy, suspendRunner]);
+  }, [engine, config, provider, push, exit, busy, suspendRunner, pendingShare]);
 
   const doToggleAuto = useCallback(() => {
     setAutoApprove((cur) => {
@@ -872,6 +899,15 @@ export default function App({ engine, config, provider, needsSetup }) {
 
           {/* `/` command autocomplete — floats above the input while typing */}
           {showCmdMenu && <CommandMenu matches={cmdMatches} selected={cmdSel} width={columns} />}
+
+          {/* a `!cmd` result is staged to share — this line becomes your note on it */}
+          {pendingShare && (
+            <Box paddingLeft={1}>
+              <Text color={theme.brand}>{glyphs.bullet} sharing </Text>
+              <Text color={theme.brandDim}>!{pendingShare.cmd}</Text>
+              <Text color={theme.faint}> — add a note, or press enter to send as-is</Text>
+            </Box>
+          )}
 
           {/* input / edit prompt */}
           <Box

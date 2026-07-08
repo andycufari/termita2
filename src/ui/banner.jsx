@@ -87,6 +87,7 @@ export function HelpPanel() {
     ['R / E / A / N', 'run / edit / always / no'],
     ['Esc', 'interrupt streaming or a prompt'],
     ['!command', 'run it yourself in the terminal (e.g. !ls, !vim x)'],
+    ['!!command', 'force full-terminal mode (a TUI it didn\'t detect)'],
     ['↑ / ↓', 'history (in input)'],
     ['wheel / PgUp / Home', 'scroll the transcript'],
   ];

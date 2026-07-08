@@ -9,16 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`!command` — run it yourself in the terminal.** Type a line starting with `!`
-  (e.g. `!ls -la`, `!vim notes.txt`, `!git commit`, `!htop`, `!python`) to run it
-  **yourself** — no model round-trip, no approval gate. termita **suspends** (leaves
-  the alternate screen, drops mouse capture, restores cooked input), hands the whole
-  terminal to the command, then re-enters and repaints when it exits. Because it's
-  the real terminal, *anything* works and is fully interactive — editors, REPLs,
-  `$EDITOR` prompts, password prompts, live TUIs — exactly as in your shell. No
-  allowlist, no guessing which commands are interactive: `!` always hands off. The
-  command owns the screen, so output isn't captured; the model is told you ran it.
-  A `!cd` sticks — the working directory is recovered out-of-band (fd 3) so termita
-  and the model follow you. Recalled verbatim with ↑ like any input.
+  (e.g. `!ls -la`, `!vim notes.txt`, `!git commit`, `!tail -f log`, `!python`) to
+  run it **yourself** — no model round-trip, no approval gate. termita **suspends**
+  (leaves the alt-screen, drops mouse capture, restores cooked input), runs it on
+  the real terminal, and returns when it's done. Because it's the real terminal,
+  *anything* works and is fully interactive — editors, REPLs, `$EDITOR`/password
+  prompts, live TUIs, `tail -f` — exactly as in your shell. A `!cd` sticks (cwd
+  recovered out-of-band via fd 3, so termita and the model follow you). Recalled
+  verbatim with ↑ like any input.
+- **Pause-on-exit + you choose what the model hears.** When a `!` command finishes
+  (you `:wq`, it exits, or you Ctrl-C it), termita pauses on the result so you can
+  read it, then offers: **enter** (tell the model you ran it — command only),
+  **f** (share command + output), **e** (silent, model told nothing). Then you're
+  back at the input with that choice *staged* — add a note or press enter to send
+  as-is. A throwaway lookup stays private; a result worth acting on gets shared,
+  optionally with your own take. This fixed the first cut, where re-entering the
+  alt-screen instantly wiped a plain command's output before you could read it.
+- **Auto capture-vs-handoff, with `!!` override.** A plain command (`ls`, `git`,
+  `grep`, a build) runs piped — output tee'd to your screen live *and* captured, so
+  **f** can share the real (trimmed; full on disk) output. A full-screen program
+  (vim, htop, a REPL, `tail -f`) gets the real TTY, fully interactive, uncaptured
+  (**f** isn't offered — there's nothing meaningful to capture). termita picks by a
+  light heuristic on the command; **`!!command`** forces full-terminal mode for an
+  interactive program it didn't recognize. No native PTY dependency — stays pure Node.
 
 ### Fixed
 - **Transcript scroll "went to the top and bypassed history."** Scrolling was

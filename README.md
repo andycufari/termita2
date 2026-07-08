@@ -215,23 +215,41 @@ dangerous patterns, which always prompt with a red warning. File writes auto-run
 ### Run a command yourself — `!`
 
 Type a line starting with `!` to run a command **yourself**, in the real terminal —
-no model round-trip, no approval prompt. termita **suspends**, hands the whole
-terminal to the command, then redraws itself when it exits. Because it's the real
-terminal, *anything* works and is fully interactive — exactly as if you'd typed it
-in your shell:
+no model round-trip, no approval prompt. termita **suspends**, runs it on your
+terminal, and comes back when it's done. Because it's the real terminal, *anything*
+works and is fully interactive — exactly as if you'd typed it in your shell:
 
 ```
-you  › !ls -la
+you  › !ls -la             # plain command — output captured, shareable
 you  › !vim notes.txt      # your editor, full-screen
 you  › !git commit         # opens $EDITOR, prompts work
+you  › !tail -f app.log    # live stream — Ctrl-C to stop, back to termita
 you  › !htop               # live TUI
 you  › !python             # drop into a REPL, then exit back to termita
 you  › !cd ../other-repo   # sticks — termita follows you there
 ```
 
-The command owns the screen while it runs, so termita doesn't capture its output —
-the model is simply told you ran it (and picks up any directory change). It's the
-terminal, with termita waiting for you to come back.
+**When the command finishes** (you `:wq`, it exits, or you Ctrl-C it), termita
+pauses on the result so you can read it and choose what the model hears:
+
+```
+─────────────────────────────────────────────
+ !ls -la finished (exit 0)
+   enter  return · tell termita you ran it (command only)
+   f      return · share command + output with termita
+   e      return · silent, tell termita nothing
+─────────────────────────────────────────────
+```
+
+Then you're back at the input with that choice **staged** — add a note (*"the
+config isn't here"*) or just press enter to send it as-is. So a throwaway lookup
+stays private (`e`), and a result worth acting on gets shared (`enter`/`f`),
+optionally with your own take. A `!cd` always sticks, so termita follows you.
+
+Full-screen programs (vim, htop, a REPL, `tail -f`) own the terminal, so their
+screen isn't captured — `f` isn't offered for those; the model just learns you ran
+them. termita picks capture-vs-handoff automatically; **`!!command`** forces the
+full-terminal mode for an interactive program it didn't recognize.
 
 ### Slash commands
 
