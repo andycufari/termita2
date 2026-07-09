@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.9.0] — 2026-07-06
 
 ### Fixed
+- **`!vim` (and other full-screen `!` programs) left the screen garbled on
+  return, with `[3;1R` typed into the input.** The suspend/hand-off toggled the
+  alt-screen and raw mode with hand-written escape codes, which raced Ink's own
+  terminal management — so the terminal's cursor-position reply leaked into the
+  input and the redraw came back corrupted. Now it uses Ink's built-in
+  `suspendTerminal()`, which flushes the frame, exits/re-enters its alt-screen,
+  and pauses/restores input correctly. vim opens clean and termita redraws clean.
 - **A `!command` typed right after a share menu was swallowed as the note.** After
   running `!ls` and getting the share menu, typing `!vim …` next treated it as your
   comment on the `ls` share (and sent it to the model) instead of running vim. Now

@@ -2,7 +2,7 @@
 // commands, subscribes to engine events. The engine is UI-agnostic; this is the
 // only place that knows about both.
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Box, Text, useApp, useInput, useStdout, useStdin } from 'ink';
+import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { EVENTS } from './engine/events.js';
 import { theme, glyphs } from './ui/theme.js';
@@ -89,9 +89,8 @@ function appendItems(cur, added) {
 }
 
 export default function App({ engine, config, provider, needsSetup }) {
-  const { exit } = useApp();
+  const { exit, suspendTerminal } = useApp();
   const { stdout } = useStdout();
-  const { stdin, setRawMode } = useStdin();
 
   const [setupOpen, setSetupOpen] = useState(!!needsSetup);
   const [items, setItems] = useState([]); // transcript items
@@ -110,7 +109,6 @@ export default function App({ engine, config, provider, needsSetup }) {
   const [mouseCapture, setMouseCapture] = useState(config.ui?.mouseCapture !== false); // wheel-scroll vs native select
   const [cognito, setCognito] = useState(false); // incognito: memory blackout (session-only)
   const [status, setStatus] = useState(null);
-  const [repaint, setRepaint] = useState(0); // bump to force a full redraw after suspend/hand-off
   const [pendingShare, setPendingShare] = useState(null); // staged `!cmd` context awaiting a comment
   const [shareMenu, setShareMenu] = useState(null); // { cmd, output, outFile, exitCode, sel } after a pipe `!cmd`
 
@@ -321,33 +319,27 @@ export default function App({ engine, config, provider, needsSetup }) {
   }, [engine, push, patchItem, config.llm.endpoint]);
 
   // Suspend termita and hand the REAL terminal to a full-screen program (vim,
-  // htop, tail -f, a REPL, or anything forced with `!!`). We leave the alt-screen,
-  // drop mouse capture, restore cooked input, let the child own the terminal
-  // (fully interactive), then re-enter the alt-screen and repaint when it exits.
-  // Only full-screen TUIs come here — plain commands run INSIDE termita (see
-  // runBangShell) so their output lands in the transcript, not a screen flash.
+  // htop, tail -f, a REPL, or anything forced with `!!`). We use Ink's OWN
+  // suspendTerminal(): it flushes the frame, exits its alt-screen, restores cooked
+  // input (raw mode + bracketed paste off), runs our callback, then re-enters the
+  // alt-screen and forces a full redraw. Doing this by hand (raw escape codes +
+  // setRawMode) fought Ink's alt-screen/stdin management — the terminal's cursor-
+  // position reply leaked into the input as `[3;1R` and the banner redrew garbled.
+  // We only add mouse-capture toggling (our own extension Ink doesn't know about).
   const suspendRunner = useCallback(async (cmd, opts) => {
-    // 1) release termita's grip on the terminal
-    try { stdout.write('\x1b[?1006l\x1b[?1002l'); } catch { /* mouse off */ }
-    try { stdout.write('\x1b[?1049l'); } catch { /* leave alt-screen */ }
-    try { stdout.write('\x1b[2J\x1b[H'); } catch { /* clear the normal buffer */ }
-    try { if (typeof setRawMode === 'function') setRawMode(false); } catch { /* cooked */ }
-    if (stdin?.isPaused && !stdin.isPaused()) { try { stdin.pause(); } catch { /* ok */ } }
-
     let res = {};
-    try {
-      res = await runDirectProcess(cmd, { ...opts, tty: true });
-    } finally {
-      // 2) reclaim the terminal and force a full repaint of our UI
-      try { if (typeof setRawMode === 'function') setRawMode(true); } catch { /* raw */ }
-      try { stdin?.resume?.(); } catch { /* ok */ }
-      try { stdout.write('\x1b[?1049h'); } catch { /* re-enter alt-screen */ }
-      if (mouseCaptureRef.current) { try { stdout.write('\x1b[?1002h\x1b[?1006h'); } catch { /* mouse on */ } }
-      try { stdout.write('\x1b[2J\x1b[H'); } catch { /* clear */ }
-      setRepaint((n) => n + 1); // nudge Ink to redraw the whole tree
-    }
+    await suspendTerminal(async () => {
+      // drop our SGR mouse capture while the child owns the terminal
+      try { stdout.write('\x1b[?1006l\x1b[?1002l'); } catch { /* mouse off */ }
+      try {
+        res = await runDirectProcess(cmd, { ...opts, tty: true });
+      } finally {
+        // re-arm mouse capture (Ink re-enters the alt-screen + repaints for us)
+        if (mouseCaptureRef.current) { try { stdout.write('\x1b[?1002h\x1b[?1006h'); } catch { /* mouse on */ } }
+      }
+    });
     return res;
-  }, [stdout, stdin, setRawMode]);
+  }, [suspendTerminal, stdout]);
 
   // --- Submit a user line ---------------------------------------------------
   const submit = useCallback(async (raw) => {
@@ -848,7 +840,7 @@ export default function App({ engine, config, provider, needsSetup }) {
   const atBottom = clampedScroll === 0;
 
   return (
-    <Box key={`app-${repaint}`} flexDirection="column" paddingX={1} height={rows}>
+    <Box flexDirection="column" paddingX={1} height={rows}>
       {/* Transcript viewport: flexGrow takes whatever height the live region
           below doesn't use; overflowY:hidden + justifyContent:flex-end clip to
           the latest content (pinned to bottom). Alt-screen repaints the whole
