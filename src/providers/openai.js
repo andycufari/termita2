@@ -104,6 +104,14 @@ export class OpenAIProvider {
     if (!res.ok) {
       let detail = '';
       try { detail = (await res.text()).slice(0, 500); } catch { /* ignore */ }
+      // LM Studio commonly 400s with "Failed to load model …" when the configured
+      // model isn't loaded — surface a clear, actionable line instead of raw JSON.
+      if (/failed to load model/i.test(detail)) {
+        throw new ProviderError(
+          `model "${this.llm.model}" isn't loaded on ${this.label} — load it (LM Studio → the model), or run /model to pick one that is`,
+          { kind: 'http' },
+        );
+      }
       throw new ProviderError(`HTTP ${res.status} from /chat/completions${detail ? `: ${detail}` : ''}`, { kind: 'http' });
     }
 

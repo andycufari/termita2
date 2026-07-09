@@ -357,7 +357,11 @@ export default function App({ engine, config, provider, needsSetup }) {
     // A `!cmd` share is staged: this line is the user's comment on it (which MAY
     // be empty — Enter alone shares the staged context with no note). Handle it
     // BEFORE the empty-guard so a bare Enter still sends. (#direct)
-    if (pendingShare) {
+    // A `!cmd` share is staged and awaiting a note. If this line is itself a
+    // `!command` or `/slash`, the user has moved on — drop the pending share
+    // (they didn't comment on it) and let the new command run below. Otherwise
+    // the line is the note (empty = share the staged context alone). (#direct)
+    if (pendingShare && !text.startsWith('!') && !text.startsWith('/')) {
       const share = pendingShare;
       setPendingShare(null);
       const content = text ? `${share.context}\n\nMy note: ${text}` : share.context;
@@ -367,6 +371,7 @@ export default function App({ engine, config, provider, needsSetup }) {
       engine.send(content);
       return;
     }
+    if (pendingShare) setPendingShare(null); // moved on to a command — discard the stage
 
     if (!text) return;
 

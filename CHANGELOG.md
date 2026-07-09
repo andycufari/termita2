@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.9.0] — 2026-07-06
 
+### Fixed
+- **A `!command` typed right after a share menu was swallowed as the note.** After
+  running `!ls` and getting the share menu, typing `!vim …` next treated it as your
+  comment on the `ls` share (and sent it to the model) instead of running vim. Now
+  a `!`/`​/` line at the share prompt drops the pending share and runs as its own
+  command; only plain text is taken as the note.
+- **Friendlier "model not loaded" error.** LM Studio 400s with a raw
+  `Failed to load model …` JSON blob when the configured model isn't loaded; termita
+  now shows a clear line ("model X isn't loaded on LM Studio — load it, or /model")
+  instead of dumping the JSON.
+
 ### Added
 - **`!command` — run it yourself.** Type a line starting with `!` to run a command
   yourself — no model round-trip, no approval gate. Two paths, chosen automatically:
