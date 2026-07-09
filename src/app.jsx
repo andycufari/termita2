@@ -13,7 +13,7 @@ import {
 } from './ui/components.jsx';
 import { saveConfig } from './config/config.js';
 import { setCognito as memSetCognito } from './config/memory.js';
-import { runDirectProcess, isInteractive, pauseMenu } from './tools/interactive.js';
+import { runDirectProcess, isInteractive } from './tools/interactive.js';
 import { runSlash } from './slash.js';
 import Setup from './ui/setup.jsx';
 import { useTerminalSize } from './ui/use-terminal-size.js';
@@ -112,6 +112,7 @@ export default function App({ engine, config, provider, needsSetup }) {
   const [status, setStatus] = useState(null);
   const [repaint, setRepaint] = useState(0); // bump to force a full redraw after suspend/hand-off
   const [pendingShare, setPendingShare] = useState(null); // staged `!cmd` context awaiting a comment
+  const [shareMenu, setShareMenu] = useState(null); // { cmd, output, outFile, exitCode, sel } after a pipe `!cmd`
 
   const [rewind, setRewind] = useState(null); // { points:[{idx,text}], sel } when in jump-back mode
   const [cmdSel, setCmdSel] = useState(0); // highlighted item in the `/` autocomplete
@@ -319,18 +320,14 @@ export default function App({ engine, config, provider, needsSetup }) {
     return off;
   }, [engine, push, patchItem, config.llm.endpoint]);
 
-  // Suspend termita and run a `!` command on the REAL terminal, then a pause menu.
-  // We leave the alt-screen, drop mouse capture, restore cooked input, run the
-  // command (TTY mode for a full-screen program so vim/tail-f work; pipe+tee mode
-  // for a plain command so its output can be captured for the model), show the
-  // exit menu, read one key, then re-enter the alt-screen and repaint. `force`
-  // (from `!!`) pins TTY mode for a program the heuristic didn't recognize.
+  // Suspend termita and hand the REAL terminal to a full-screen program (vim,
+  // htop, tail -f, a REPL, or anything forced with `!!`). We leave the alt-screen,
+  // drop mouse capture, restore cooked input, let the child own the terminal
+  // (fully interactive), then re-enter the alt-screen and repaint when it exits.
+  // Only full-screen TUIs come here — plain commands run INSIDE termita (see
+  // runBangShell) so their output lands in the transcript, not a screen flash.
   const suspendRunner = useCallback(async (cmd, opts) => {
-    const tty = opts?.forceTty || isInteractive(cmd);
-    const outFile = tty ? null : (engine.log?.outFilePath?.(`bang-${Date.now().toString(36)}`) || null);
-
-    // 1) release termita's grip on the terminal. Leave the alt-screen back to the
-    // normal buffer and clear it so the command starts on a clean screen.
+    // 1) release termita's grip on the terminal
     try { stdout.write('\x1b[?1006l\x1b[?1002l'); } catch { /* mouse off */ }
     try { stdout.write('\x1b[?1049l'); } catch { /* leave alt-screen */ }
     try { stdout.write('\x1b[2J\x1b[H'); } catch { /* clear the normal buffer */ }
@@ -339,13 +336,9 @@ export default function App({ engine, config, provider, needsSetup }) {
 
     let res = {};
     try {
-      res = await runDirectProcess(cmd, { ...opts, tty, outFile });
-      // 2) pause on the real terminal: let the user read the output + decide what
-      // the model hears. (skipped if the run was aborted before it produced a code)
-      const hasOutput = !tty && !!(res.output && res.output.trim());
-      res.choice = await pauseMenu(cmd, res.exitCode, { hasOutput });
+      res = await runDirectProcess(cmd, { ...opts, tty: true });
     } finally {
-      // 3) reclaim the terminal and force a full repaint of our UI
+      // 2) reclaim the terminal and force a full repaint of our UI
       try { if (typeof setRawMode === 'function') setRawMode(true); } catch { /* raw */ }
       try { stdin?.resume?.(); } catch { /* ok */ }
       try { stdout.write('\x1b[?1049h'); } catch { /* re-enter alt-screen */ }
@@ -354,7 +347,7 @@ export default function App({ engine, config, provider, needsSetup }) {
       setRepaint((n) => n + 1); // nudge Ink to redraw the whole tree
     }
     return res;
-  }, [stdout, stdin, setRawMode, engine]);
+  }, [stdout, stdin, setRawMode]);
 
   // --- Submit a user line ---------------------------------------------------
   const submit = useCallback(async (raw) => {
@@ -377,11 +370,12 @@ export default function App({ engine, config, provider, needsSetup }) {
 
     if (!text) return;
 
-    // `!cmd` — run a command yourself on the REAL terminal (no model, no approval).
-    // termita suspends, runs it fully interactive (vim, tail -f, plain ls), shows
-    // a pause menu on exit so you read the output + choose what the model hears,
-    // then returns you here with that context STAGED for an optional comment.
-    // `!!cmd` forces full-terminal mode for a program the heuristic missed. (#direct)
+    // `!cmd` — run a command yourself (no model, no approval). Two paths:
+    //  · plain command → runs INSIDE termita, output streams into the transcript,
+    //    then an in-app share menu (enter/f/e) picks what the model hears.
+    //  · full-screen TUI (vim, htop, tail -f) or `!!cmd` → suspend + hand off the
+    //    real terminal; nothing to capture, so it stages the command straight away.
+    // Recalled verbatim with ↑ like any input. (#direct)
     if (text.startsWith('!') && text.length > 1) {
       const forceTty = text.startsWith('!!');
       const cmd = text.slice(forceTty ? 2 : 1).trim();
@@ -391,10 +385,15 @@ export default function App({ engine, config, provider, needsSetup }) {
       if (busy) { push({ kind: 'notice', text: 'busy — wait for the current turn (esc to stop), then run your `!` command', level: 'warn' }); return; }
       setBusy(true);
       setBusyAt(Date.now());
-      const { staged } = await engine.runDirect(cmd, { suspendRunner: (c, o) => suspendRunner(c, { ...o, forceTty }) });
-      // Enter/Full → stage the context and drop the user in the input to comment.
-      // Empty → staged is null, nothing to share, clean input. (busy cleared by TURN_DONE)
-      if (staged) { setPendingShare({ cmd, context: staged }); }
+      if (forceTty || isInteractive(cmd)) {
+        // full-screen program → suspend, hand off, stage the command
+        const { staged } = await engine.runBangTty(cmd, { suspendRunner });
+        if (staged) setPendingShare({ cmd, context: staged });
+      } else {
+        // plain command → run in-app, then open the share menu on its output
+        const res = await engine.runBangShell(cmd);
+        if (res) setShareMenu({ cmd, output: res.output, outFile: res.outFile, exitCode: res.exitCode, sel: 0 });
+      }
       return;
     }
 
@@ -633,10 +632,32 @@ export default function App({ engine, config, provider, needsSetup }) {
     push({ kind: 'notice', text: 'jumped back — edit & send, or type a new message', level: 'ok' });
   }, [engine, push]);
 
+  // Resolve the in-app share menu shown after a plain `!cmd`. `choice` is
+  // 'enter' (share command only), 'full' (command + output), or 'empty' (silent).
+  // enter/full → stage the context and drop into the input to add a note; empty →
+  // clean input, nothing shared. Handled by termita's own keys (no stdin fight).
+  const resolveShareMenu = useCallback((choice) => {
+    setShareMenu((m) => {
+      if (!m) return null;
+      const staged = engine.stageDirect(m.cmd, { choice, output: m.output, outFile: m.outFile, exitCode: m.exitCode });
+      if (staged) setPendingShare({ cmd: m.cmd, context: staged });
+      return null;
+    });
+  }, [engine]);
+
+  // The three share-menu rows, in order (used for ↑↓ navigation + labels).
+  const shareActions = shareMenu
+    ? [
+        { key: 'enter', label: 'tell termita you ran it (command only)' },
+        ...(shareMenu.output && shareMenu.output.trim() ? [{ key: 'full', label: 'share command + output' }] : []),
+        { key: 'empty', label: 'silent — tell termita nothing' },
+      ]
+    : [];
+
   // `/` autocomplete: which commands match what's being typed right now. Only
   // active when idle (not approving / editing / picking / busy). Declared here —
   // BEFORE the key handler — because useInput's Tab branch reads showCmdMenu.
-  const cmdMatches = (!pending && !editing && !picker && !rewind && !busy) ? matchCommands(input) : [];
+  const cmdMatches = (!pending && !editing && !picker && !rewind && !shareMenu && !busy) ? matchCommands(input) : [];
   const showCmdMenu = cmdMatches.length > 0;
   const narrow = columns < 72; // compact the footer/hints on small terminals
 
@@ -659,6 +680,22 @@ export default function App({ engine, config, provider, needsSetup }) {
     // End → back to the latest (pinned to bottom).
     if (key.home) { setScrollUp(maxScrollRef.current); return; }
     if (key.end) { setScrollUp(0); return; }
+
+    // share menu (after a plain `!cmd`) owns the keyboard while open. ↑↓ navigate,
+    // Enter picks the highlighted row, or hit the letter directly (f/e). Esc =
+    // silent (same as choosing 'empty'). Handled here in termita's own key loop —
+    // NOT by a raw stdin read — which is what fixes the flash-and-vanish bug.
+    if (shareMenu) {
+      const acts = shareActions;
+      if (key.escape) { resolveShareMenu('empty'); return; }
+      if (key.upArrow) { setShareMenu((m) => ({ ...m, sel: (m.sel - 1 + acts.length) % acts.length })); return; }
+      if (key.downArrow) { setShareMenu((m) => ({ ...m, sel: (m.sel + 1) % acts.length })); return; }
+      if (key.return) { resolveShareMenu(acts[shareMenu.sel]?.key || 'enter'); return; }
+      const k = inputCh?.toLowerCase();
+      if (k === 'f' && acts.some((a) => a.key === 'full')) { resolveShareMenu('full'); return; }
+      if (k === 'e') { resolveShareMenu('empty'); return; }
+      return;
+    }
 
     // Edit mode handled by its own TextInput; ignore here
     if (editing) {
@@ -841,8 +878,23 @@ export default function App({ engine, config, provider, needsSetup }) {
       {/* approval bar for the pending tool */}
       {pending && <ApprovalMenu selected={selected} danger={!!pending.danger} />}
 
-      {/* rewind picker (double-Esc): jump back to an earlier message */}
-      {rewind ? (
+      {/* share menu after a plain `!cmd`: its output is already in the transcript
+          above — pick what the model hears. In-app, so no stdin fight. */}
+      {shareMenu ? (
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1} marginBottom={1}>
+          <Text color={theme.brand} bold>
+            {glyphs.bullet} !{shareMenu.cmd.length > 40 ? shareMenu.cmd.slice(0, 39) + '…' : shareMenu.cmd} finished
+            {shareMenu.exitCode != null && shareMenu.exitCode !== 0 ? <Text color={theme.danger}> (exit {shareMenu.exitCode})</Text> : ''}
+            <Text color={theme.faint}> — share with termita?</Text>
+          </Text>
+          {shareActions.map((a, i) => (
+            <Text key={a.key} color={i === shareMenu.sel ? theme.ok : theme.dim} bold={i === shareMenu.sel}>
+              {i === shareMenu.sel ? glyphs.bullet : ' '} {a.label}
+            </Text>
+          ))}
+          <Text color={theme.faint}>  ↑↓ select · enter · f share+output · e silent</Text>
+        </Box>
+      ) : rewind ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1} marginBottom={1}>
           <Text color={theme.brand} bold>↩ jump back to…</Text>
           {rewind.points.map((p, i) => (

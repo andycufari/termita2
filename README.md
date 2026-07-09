@@ -214,42 +214,44 @@ dangerous patterns, which always prompt with a red warning. File writes auto-run
 
 ### Run a command yourself — `!`
 
-Type a line starting with `!` to run a command **yourself**, in the real terminal —
-no model round-trip, no approval prompt. termita **suspends**, runs it on your
-terminal, and comes back when it's done. Because it's the real terminal, *anything*
-works and is fully interactive — exactly as if you'd typed it in your shell:
+Type a line starting with `!` to run a command **yourself** — no model round-trip,
+no approval prompt. What happens depends on the command:
+
+**Plain commands** (`!ls`, `!git status`, `!grep …`) run **inside termita**. Their
+output streams straight into the transcript — it stays there, scrollable, like any
+command output. When it finishes, a small menu lets you pick what the model hears:
 
 ```
-you  › !ls -la             # plain command — output captured, shareable
+─────────────────────────────────────────────
+ !ls -la finished
+   ▸ tell termita you ran it (command only)
+     share command + output
+     silent — tell termita nothing
+   ↑↓ select · enter · f share+output · e silent
+─────────────────────────────────────────────
+```
+
+Pick `enter`/`f`/`e`, then you're back at the input with that choice **staged** —
+add a note (*"the config isn't here"*) or just press enter to send it as-is. So a
+throwaway lookup stays private (`e`), and a result worth acting on gets shared,
+optionally with your own take.
+
+**Full-screen programs** (`!vim`, `!htop`, `!tail -f`, `!python`, …) need the whole
+terminal. termita **suspends**, hands it off (fully interactive — vim keys, prompts,
+live TUIs, exactly as in your shell), and redraws when you exit (`:wq`, quit, or
+Ctrl-C):
+
+```
 you  › !vim notes.txt      # your editor, full-screen
 you  › !git commit         # opens $EDITOR, prompts work
 you  › !tail -f app.log    # live stream — Ctrl-C to stop, back to termita
-you  › !htop               # live TUI
-you  › !python             # drop into a REPL, then exit back to termita
 you  › !cd ../other-repo   # sticks — termita follows you there
 ```
 
-**When the command finishes** (you `:wq`, it exits, or you Ctrl-C it), termita
-pauses on the result so you can read it and choose what the model hears:
-
-```
-─────────────────────────────────────────────
- !ls -la finished (exit 0)
-   enter  return · tell termita you ran it (command only)
-   f      return · share command + output with termita
-   e      return · silent, tell termita nothing
-─────────────────────────────────────────────
-```
-
-Then you're back at the input with that choice **staged** — add a note (*"the
-config isn't here"*) or just press enter to send it as-is. So a throwaway lookup
-stays private (`e`), and a result worth acting on gets shared (`enter`/`f`),
-optionally with your own take. A `!cd` always sticks, so termita follows you.
-
-Full-screen programs (vim, htop, a REPL, `tail -f`) own the terminal, so their
-screen isn't captured — `f` isn't offered for those; the model just learns you ran
-them. termita picks capture-vs-handoff automatically; **`!!command`** forces the
-full-terminal mode for an interactive program it didn't recognize.
+These own the screen, so there's no captured output to share — the model just
+learns you ran them. termita picks which path automatically; **`!!command`** forces
+the full-terminal mode for an interactive program it didn't recognize. A `!cd`
+always sticks, so termita follows you. (No native PTY — stays pure Node.)
 
 ### Slash commands
 

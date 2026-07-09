@@ -10,7 +10,7 @@ import {
   toolSchemas,
   braveKey,
 } from '../tools/index.js';
-import { shellState } from '../tools/shell.js';
+import { runShell, shellState } from '../tools/shell.js';
 import { createProvider } from '../providers/index.js';
 import { buildSystemPrompt } from '../prompt/system.js';
 import { SessionLog } from './log.js';
@@ -33,6 +33,7 @@ export class Engine {
     this.history = []; // OpenAI-format messages (no system; that's separate)
     this.busy = false;
     this.abort = null; // current AbortController
+    this._bangSeq = 0; // ids for user-run `!cmd` (distinct from model tool ids)
 
     // pending approval: { resolve, toolCall }
     this._pendingDecision = null;
@@ -137,45 +138,72 @@ export class Engine {
     return result;
   }
 
-  // Run a command the USER typed directly (the `!cmd` escape hatch) — NOT proposed
-  // by the model, no approval gate. `suspendRunner` (supplied by the UI) tears
-  // termita's screen down, runs the command on the REAL terminal (fully
-  // interactive — vim, tail -f, a REPL, plain ls), shows a pause menu on exit, and
-  // returns the user's choice about what the model should hear. See interactive.js.
-  //
-  // We DON'T push history here. The choice becomes a *staged* context the UI puts
-  // in front of the input so the user can add a comment; command-context + comment
-  // are then sent together as one user turn (see app.jsx). Returns:
-  //   { staged: string|null }  — text to seed the next turn, or null (silent 'E').
-  // cwd tracks via fd 3 so `!cd` sticks; the system prompt is refreshed.
-  async runDirect(command, { suspendRunner } = {}) {
-    const cmd = String(command || '').trim();
+  // Build the staged "I ran this myself" turn from a `!cmd` + the user's share
+  // choice. Returns the text to seed the next turn, or null (silent 'empty').
+  // Shared by both `!` paths (pipe + tty). cmd-context + the user's comment are
+  // sent together as one user turn by the UI; we DON'T push history here.
+  stageDirect(cmd, { choice, output, outFile, exitCode }) {
+    const codeNote = exitCode != null ? ` (exit ${exitCode})` : '';
+    if (choice === 'full' && output && output.trim()) {
+      const trimmed = clampForModel(output, undefined, outFile);
+      return `[I ran this directly in my terminal — not a step you proposed]\n$ ${cmd}${codeNote}\n${trimmed}`;
+    }
+    if (choice === 'enter' || (choice === 'full' && !output)) {
+      return `[I ran this directly in my terminal — not a step you proposed]\n$ ${cmd}${codeNote}\n(output stayed on my screen — ask if you need it)`;
+    }
+    return null; // 'empty' → model told nothing
+  }
+
+  // `!cmd` PIPE path: run a plain command WITHOUT leaving termita. Output streams
+  // into the transcript via the same events as a tool run (so it renders live and
+  // scrolls, and is never lost to a screen flash). No approval gate. Returns
+  // { output, outFile, exitCode } so the UI can offer the share menu. cwd tracks.
+  async runBangShell(cmd, { onEvent } = {}) {
+    if (!cmd || this.busy) return null;
+    this.busy = true;
+    this.abort = new AbortController();
+    const id = `bang-${++this._bangSeq}`;
+    try {
+      this.log.command(`!${cmd}`, 'user ran directly');
+      this.events.emit(EVENTS.TOOL_PROPOSED, { id, name: 'shell', args: { command: cmd, why: 'you ran this yourself' }, gate: null });
+      this.events.emit(EVENTS.TOOL_RUNNING, { id });
+      const outFile = this.log.outFilePath(id);
+      const result = await runShell(cmd, {
+        cwd: shellState.cwd,
+        signal: this.abort.signal,
+        onChunk: (chunk) => this.events.emit(EVENTS.TOOL_OUTPUT, { id, chunk }),
+        onFull: outFile ? (chunk) => { this.log.appendOutput(outFile, chunk); return outFile; } : null,
+      });
+      this.log.output(result.output, result.meta?.exitCode);
+      this.events.emit(EVENTS.TOOL_DONE, { id, output: result.output, meta: result.meta });
+      if (result.meta?.cwd) { shellState.cwd = result.meta.cwd; this.rebuildSystemPrompt(); }
+      return { output: result.output, outFile: result.meta?.fullPath || outFile, exitCode: result.meta?.exitCode };
+    } catch (err) {
+      if (err.name !== 'AbortError') this.events.emit(EVENTS.ERROR, { message: err.message, kind: err.kind });
+      return null;
+    } finally {
+      this.busy = false;
+      this.abort = null;
+      this.events.emit(EVENTS.TURN_DONE, {});
+    }
+  }
+
+  // `!cmd` TTY path: a full-screen program (vim, htop, tail -f, or forced with
+  // `!!`) that must own the real terminal. `suspendRunner` (from the UI) tears
+  // termita's screen down, runs it interactive, and redraws. Nothing to capture,
+  // so no share menu — we just record the command (unless empty). cwd tracks via
+  // fd 3. Returns { staged } for the UI to seed the comment prompt.
+  async runBangTty(cmd, { suspendRunner } = {}) {
     if (!cmd || this.busy || typeof suspendRunner !== 'function') return { staged: null };
     this.busy = true;
     this.abort = new AbortController();
-
     try {
-      this.log.command(`!${cmd}`, 'user ran directly');
+      this.log.command(`!${cmd}`, 'user ran directly (interactive)');
       const res = await suspendRunner(cmd, { cwd: shellState.cwd, signal: this.abort.signal });
-
-      // Adopt the child's final $PWD so a `!cd` sticks; refresh the prompt.
-      if (res?.cwd) shellState.cwd = res.cwd;
+      if (res?.cwd) { shellState.cwd = res.cwd; }
       this.rebuildSystemPrompt();
-
-      const choice = res?.choice || 'empty';
-      const codeNote = res?.exitCode != null ? ` (exit ${res.exitCode})` : '';
-      let staged = null;
-      if (choice === 'full' && res?.output) {
-        const trimmed = clampForModel(res.output, undefined, res.outFile);
-        staged = `[I ran this directly in my terminal — not a step you proposed]\n$ ${cmd}${codeNote}\n${trimmed || '(no output)'}`;
-      } else if (choice === 'enter') {
-        staged = `[I ran this directly in my terminal — not a step you proposed]\n$ ${cmd}${codeNote}\n(output stayed on my screen — ask if you need it)`;
-      } // 'empty' → staged stays null (model told nothing)
-
-      this.events.emit(EVENTS.NOTICE, {
-        text: choice === 'empty' ? `ran \`${cmd}\` (private)` : `ran \`${cmd}\` — add a note or press enter to share`,
-        level: 'dim',
-      });
+      const staged = this.stageDirect(cmd, { choice: 'enter', exitCode: res?.exitCode });
+      this.events.emit(EVENTS.NOTICE, { text: `ran \`${cmd}\` — add a note or press enter to share`, level: 'dim' });
       return { staged };
     } catch (err) {
       if (err.name !== 'AbortError') this.events.emit(EVENTS.ERROR, { message: err.message, kind: err.kind });
