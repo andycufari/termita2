@@ -215,13 +215,17 @@ export class Engine {
     }
   }
 
-  // The main loop for one user turn.
-  async send(userText) {
+  // The main loop for one user turn. `content` is either a plain string, or an
+  // OpenAI content-parts array (text + image_url parts) when the user attached an
+  // image (see attach.js). The provider passes `content` straight through, so a
+  // parts array reaches the model as native multimodal input.
+  async send(content) {
     if (this.busy) return;
     this.busy = true;
     this.abort = new AbortController();
-    this.history.push({ role: 'user', content: userText });
-    this.log.user(userText);
+    this.history.push({ role: 'user', content });
+    // Log a readable string form (arrays carry image blobs we don't want in logs).
+    this.log.user(typeof content === 'string' ? content : summarizeContent(content));
 
     try {
       await this._loop();
@@ -415,4 +419,17 @@ export class Engine {
     });
     void extra;
   }
+}
+
+// Readable one-line summary of a content-parts array, for the session log (we
+// don't want a base64 image blob in the plaintext log). Text parts pass through;
+// image parts become a short marker.
+function summarizeContent(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return String(content ?? '');
+  return content.map((p) => {
+    if (p?.type === 'text') return p.text || '';
+    if (p?.type === 'image_url') return '[image attached]';
+    return '';
+  }).filter(Boolean).join('\n');
 }

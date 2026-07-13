@@ -5,6 +5,26 @@ All notable changes to **termita** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] — 2026-07-13
+
+### Added
+- **File attachments — `@file`.** Reference a file with `@path` in a message (or
+  drag-and-drop it onto the terminal — that pastes the path, picked up the same
+  way). Handling is by file type, decided at send time:
+  - **Text files** (`.md`, `.txt`, source, `.json`, …) are **read and inlined**
+    into the message, so any model — including a text-only local Qwen — sees the
+    real contents. Large files are trimmed to a head+tail (with a marker so the
+    model can `read` the rest).
+  - **Images** (`.png`, `.jpg`, `.webp`, `.gif`) are **attached** via the standard
+    OpenAI multimodal format (base64 `image_url` content part), reaching LM Studio
+    / OpenAI / Anthropic as native vision input. Needs a vision model; with a
+    text-only model loaded, termita shows a clear "this model has no vision — load
+    a vision model" line instead of a raw error.
+
+  Paths may be quoted, use `~`, or be relative to the shell cwd. A non-file
+  `@mention` is left untouched. Binary non-image files are skipped with a note.
+  (No new dependency — images are base64-encoded in pure Node.)
+
 ## [2.9.0] — 2026-07-06
 
 ### Fixed

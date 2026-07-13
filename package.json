@@ -1,6 +1,6 @@
 {
   "name": "termita",
-  "version": "2.9.0",
+  "version": "2.10.0",
   "description": "Local AI first copilot for your console — chat with a model that operates your shell, one approved command at a time. Local (LM Studio/Ollama), or OpenAI/Anthropic.",
   "type": "module",
   "bin": {

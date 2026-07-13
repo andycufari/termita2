@@ -14,6 +14,7 @@ import {
 import { saveConfig } from './config/config.js';
 import { setCognito as memSetCognito } from './config/memory.js';
 import { runDirectProcess, isInteractive } from './tools/interactive.js';
+import { buildUserContent } from './attach.js';
 import { runSlash } from './slash.js';
 import Setup from './ui/setup.jsx';
 import { useTerminalSize } from './ui/use-terminal-size.js';
@@ -426,10 +427,22 @@ export default function App({ engine, config, provider, needsSetup }) {
       return;
     }
 
-    push({ kind: 'msg', who: 'you', text });
+    // Resolve any `@file` attachments (also how a drag-dropped path arrives).
+    // Text files are inlined into the message; images become OpenAI image_url
+    // parts (needs a vision model — a text-only model returns a clean error).
+    // With no real-file @tokens, `built.parts` is null and it's a plain string.
+    const built = buildUserContent(text);
+    for (const n of built.notes) push({ kind: 'notice', text: n, level: 'warn' });
+    const imgs = built.attachments.filter((a) => a.kind === 'image');
+    const txts = built.attachments.filter((a) => a.kind === 'text');
+    const chip = [
+      ...txts.map((a) => `📄 ${basename(a.abs)}`),
+      ...imgs.map((a) => `🖼 ${basename(a.abs)}`),
+    ].join('  ');
+    push({ kind: 'msg', who: 'you', text: chip ? `${built.text || ''}${built.text ? '\n' : ''}${chip}`.trim() : built.text });
     setBusy(true);
     setBusyAt(Date.now());
-    engine.send(text);
+    engine.send(built.parts || built.text);
   }, [engine, config, provider, push, exit, busy, suspendRunner, pendingShare]);
 
   const doToggleAuto = useCallback(() => {
@@ -591,7 +604,7 @@ export default function App({ engine, config, provider, needsSetup }) {
     if (now - lastEsc.current < 600) {
       lastEsc.current = 0;
       const points = engine.history
-        .map((m, idx) => ({ idx, text: m.role === 'user' ? m.content : null }))
+        .map((m, idx) => ({ idx, text: m.role === 'user' ? contentToText(m.content) : null }))
         .filter((p) => p.text);
       if (points.length === 0) { push({ kind: 'notice', text: 'nothing to jump back to', level: 'dim' }); return; }
       setRewind({ points, sel: points.length - 1 });
@@ -1106,14 +1119,39 @@ function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, se
   );
 }
 
-// Rough token estimate: ~4 chars/token across all message content.
+// Flatten a message's `content` to plain text — it's a string normally, or an
+// OpenAI parts array when an image was attached (see attach.js). Image parts
+// don't have meaningful text; they're represented by a short marker.
+function contentToText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((p) => (p?.type === 'text' ? p.text : p?.type === 'image_url' ? '🖼 image' : '')).filter(Boolean).join(' ');
+}
+
+// Rough token estimate: ~4 chars/token across all message content. Image parts
+// are counted as a flat ~1.2k tokens each (a coarse stand-in for tiled vision
+// tokens) so the gauge doesn't wildly under-report when images are attached.
 function estimateTokens(history) {
   let chars = 0;
+  let imageTokens = 0;
   for (const m of history || []) {
     if (typeof m.content === 'string') chars += m.content.length;
+    else if (Array.isArray(m.content)) {
+      for (const p of m.content) {
+        if (p?.type === 'text') chars += (p.text || '').length;
+        else if (p?.type === 'image_url') imageTokens += 1200;
+      }
+    }
     if (m.tool_calls) for (const tc of m.tool_calls) chars += (tc.function?.arguments || '').length;
   }
-  return Math.ceil(chars / 4);
+  return Math.ceil(chars / 4) + imageTokens;
+}
+
+// Last path segment (for attachment chips) — cheap, avoids pulling node:path in.
+function basename(p) {
+  const s = String(p || '').replace(/\/+$/, '');
+  const i = s.lastIndexOf('/');
+  return i >= 0 ? s.slice(i + 1) : s;
 }
 
 function fmtTokens(n) {

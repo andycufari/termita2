@@ -253,6 +253,31 @@ learns you ran them. termita picks which path automatically; **`!!command`** for
 the full-terminal mode for an interactive program it didn't recognize. A `!cd`
 always sticks, so termita follows you. (No native PTY — stays pure Node.)
 
+### Attaching files — `@`
+
+Reference a file with **`@path`** in your message (or **drag-and-drop** it onto
+the terminal — that pastes the path, which termita picks up the same way). What
+happens depends on the file type, decided at send time:
+
+```
+you  › summarize @notes.md and @src/config.py
+you  › what's wrong in this screenshot? @~/Desktop/error.png
+```
+
+- **Text files** (`.md`, `.txt`, source code, `.json`, …) are **read and inlined**
+  into your message, so any model can see the actual contents — including a
+  text-only local model. Big files are trimmed to a head+tail (the model can
+  `read` the rest).
+- **Images** (`.png`, `.jpg`, `.webp`, `.gif`) are **attached** using the standard
+  OpenAI multimodal format (a base64 `image_url` part). This needs a **vision
+  model** — with a text-only model loaded (most local Qwens), termita surfaces a
+  clear "this model has no vision — load a vision model" message rather than a raw
+  error. Point termita at a vision model (a Qwen-VL / Llava in LM Studio, or
+  OpenAI/Anthropic) and images just work.
+
+Paths may be quoted (`@"my file.md"`), use `~`, or be relative to the current
+directory. An `@mention` that isn't a real file is left in your message untouched.
+
 ### Slash commands
 
 | Command              | Action                                          |

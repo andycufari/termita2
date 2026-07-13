@@ -88,6 +88,7 @@ export function HelpPanel() {
     ['Esc', 'interrupt streaming or a prompt'],
     ['!command', 'run it yourself in the terminal (e.g. !ls, !vim x)'],
     ['!!command', 'force full-terminal mode (a TUI it didn\'t detect)'],
+    ['@file', 'attach a file — .md/.txt inlined, images sent (drag-drop too)'],
     ['↑ / ↓', 'history (in input)'],
     ['wheel / PgUp / Home', 'scroll the transcript'],
   ];

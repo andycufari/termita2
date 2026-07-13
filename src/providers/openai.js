@@ -5,6 +5,14 @@ import { ProviderError, resolveApiKey, parseSSE, hash } from './base.js';
 
 const OPENAI_DEFAULT_ENDPOINT = 'https://api.openai.com/v1';
 
+// Did this request carry an image part? (used to give a vision-specific error)
+function hadImage(body) {
+  for (const m of body?.messages || []) {
+    if (Array.isArray(m.content) && m.content.some((p) => p?.type === 'image_url')) return true;
+  }
+  return false;
+}
+
 export class OpenAIProvider {
   constructor(llm) {
     this.llm = llm; // { provider, endpoint, model, apiKey, maxTokens, reasoning }
@@ -109,6 +117,14 @@ export class OpenAIProvider {
       if (/failed to load model/i.test(detail)) {
         throw new ProviderError(
           `model "${this.llm.model}" isn't loaded on ${this.label} — load it (LM Studio → the model), or run /model to pick one that is`,
+          { kind: 'http' },
+        );
+      }
+      // Image attached to a text-only model → the server rejects the image_url /
+      // vision content. Point the user at loading a vision model.
+      if (/image|vision|multimodal|content.*not.*support|unsupported content/i.test(detail) && hadImage(body)) {
+        throw new ProviderError(
+          `model "${this.llm.model}" has no vision — it can't read images. Load a vision model (e.g. a Qwen-VL / Llava in LM Studio), or send text/.md files instead`,
           { kind: 'http' },
         );
       }
