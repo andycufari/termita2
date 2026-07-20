@@ -138,6 +138,9 @@ export default function App({ engine, config, provider, needsSetup }) {
   // which is focused. (Distinct from `narrow` further down, which only compacts
   // the footer at <72 — different threshold, different purpose.)
   const dual = columns >= MIN_DUAL;
+  // Are we typing into the shell? Drives the prompt marker, the input border and
+  // the pane highlight — one flag so they can never disagree.
+  const shellFocus = focus === 'shell';
   const leftWidth = dual ? Math.floor(columns / 2) : columns;
   const rightWidth = dual ? columns - leftWidth : columns;
   // Width available for CONTENT inside a pane: the border eats 2 columns, and
@@ -910,7 +913,7 @@ export default function App({ engine, config, provider, needsSetup }) {
             focused={focus === 'chat'}
             bordered={dual}
             borderColor={theme.faint}
-            focusColor={theme.accent}
+            focusColor={theme.brand}   /* cyan — you're in termita */
             clipBottom={clipBottom}
             header={startIdx === 0 ? <Banner version={VERSION} firstRun={needsSetup} columns={chatWidth} /> : null}
           >
@@ -927,28 +930,12 @@ export default function App({ engine, config, provider, needsSetup }) {
             focused={focus === 'shell'}
             bordered={dual}
             borderColor={theme.faint}
-            focusColor={theme.accent}
+            focusColor={theme.shell}   /* neon green — you're in the shell */
             clipBottom={shellScroll.clipBottom}
-            footer={
-              <Box>
-                <Text color={focus === 'shell' ? theme.accent : theme.faint}>{glyphs.prompt} </Text>
-                {focus === 'shell' && !busy ? (
-                  <PromptInput
-                    value={shellInput}
-                    onChange={setShellInput}
-                    onSubmit={submitShell}
-                    disabled={false}
-                    history={shellHistory}
-                    histIdx={shellHistIdx}
-                    setInput={setShellInput}
-                    onEscape={handleEscape}
-                  />
-                ) : (
-                  <Text color={theme.faint}>{shellInput || (busy ? 'running… esc to stop' : 'tab to focus')}</Text>
-                )}
-              </Box>
-            }
           >
+            {shellScroll.shownItems.length === 0 && (
+              <Text color={theme.faint}>  shell — tab to switch, type a command (no ! needed)</Text>
+            )}
             {shellScroll.shownItems.map((it) => (
               <TranscriptItem key={it._k} item={it} width={shellWidth} />
             ))}
@@ -1059,7 +1046,9 @@ export default function App({ engine, config, provider, needsSetup }) {
           {/* input / edit prompt */}
           <Box
             borderStyle="round"
-            borderColor={pending ? theme.faint : theme.brand}
+            // Border tracks the active context: cyan in termita, neon green in
+            // the shell — so "which mode am I typing into" is visible at a glance.
+            borderColor={pending ? theme.faint : shellFocus ? theme.shell : theme.brand}
             borderLeft={false}
             borderRight={false}
             paddingX={1}
@@ -1078,28 +1067,32 @@ export default function App({ engine, config, provider, needsSetup }) {
               </>
             ) : (
               <>
-                <Box flexShrink={0}><Text color={pending ? theme.faint : theme.brand} bold>{glyphs.prompt} </Text></Box>
+                {/* goncho: ONE input, two identities. Tab doesn't move you to a
+                    second prompt — it changes what this prompt IS. The marker and
+                    colour switch with it: brand cyan `›` for termita, shell accent
+                    `$` for the console. Keeping a single mounted TextInput also
+                    sidesteps Ink's global useInput, where two would both consume
+                    every keystroke. */}
+                <Box flexShrink={0}>
+                  <Text color={pending ? theme.faint : shellFocus ? theme.shell : theme.brand} bold>
+                    {shellFocus ? '$' : glyphs.prompt}{' '}
+                  </Text>
+                </Box>
                 <Box flexGrow={1}>
-                  {/* goncho: the chat prompt is UNMOUNTED when the shell pane has
-                      focus — not merely hidden. Ink's useInput is global, so two
-                      mounted TextInputs would both consume every keystroke. */}
-                  {focus === 'chat' ? (
-                    <PromptInput
-                      value={input}
-                      onChange={setInput}
-                      onSubmit={submit}
-                      disabled={!!pending}
-                      history={inputHistory}
-                      histIdx={histIdx}
-                      setInput={setInput}
-                      onEscape={handleEscape}
-                      cmdMatches={cmdMatches}
-                      cmdSel={cmdSel}
-                      setCmdSel={setCmdSel}
-                    />
-                  ) : (
-                    <Text color={theme.faint}>{input || 'tab to focus'}</Text>
-                  )}
+                  <PromptInput
+                    key={shellFocus ? 'shell' : 'chat'} /* remount: separate draft/history state */
+                    value={shellFocus ? shellInput : input}
+                    onChange={shellFocus ? setShellInput : setInput}
+                    onSubmit={shellFocus ? submitShell : submit}
+                    disabled={!!pending}
+                    history={shellFocus ? shellHistory : inputHistory}
+                    histIdx={shellFocus ? shellHistIdx : histIdx}
+                    setInput={shellFocus ? setShellInput : setInput}
+                    onEscape={handleEscape}
+                    cmdMatches={shellFocus ? [] : cmdMatches}
+                    cmdSel={cmdSel}
+                    setCmdSel={setCmdSel}
+                  />
                 </Box>
               </>
             )}

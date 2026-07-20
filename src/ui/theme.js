@@ -17,6 +17,11 @@ export const theme = {
   // surfaces
   border: '#1b9aaa',
   borderDim: '#234',
+  // goncho panes: cyan = you're in termita, neon green = you're in the shell.
+  // Aliases (not new hues) so the two contexts stay visually distinct while the
+  // palette stays the same.
+  shell: '#39ff14',    // neon green — shell pane focused / shell prompt
+  shellDim: '#1f8f0c',
   // role labels
   you: '#ff4dd8',
   term: '#00e5ff',

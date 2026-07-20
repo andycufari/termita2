@@ -25,8 +25,14 @@ export function Pane({
   footer = null,  // rendered below it, inside the pane (e.g. a prompt)
   children,
 }) {
+  // The FOCUSED pane gets a heavier border as well as its own colour — on a dim
+  // terminal (or for anyone who can't rely on hue) the active side should still
+  // read as active from the line weight alone.
   const border = bordered
-    ? { borderStyle: 'round', borderColor: focused ? focusColor : borderColor }
+    ? {
+        borderStyle: focused ? 'bold' : 'round',
+        borderColor: focused ? focusColor : borderColor,
+      }
     : {};
   return (
     <Box flexDirection="column" width={width} flexGrow={width ? 0 : 1} flexShrink={1} {...border}>
