@@ -165,7 +165,9 @@ export class Engine {
     const id = `bang-${++this._bangSeq}`;
     try {
       this.log.command(`!${cmd}`, 'user ran directly');
-      this.events.emit(EVENTS.TOOL_PROPOSED, { id, name: 'shell', args: { command: cmd, why: 'you ran this yourself' }, gate: null });
+      // No `why`: the user typed this, so "you ran this yourself" was noise on
+      // every single card. The model's own tool calls still carry a real reason.
+      this.events.emit(EVENTS.TOOL_PROPOSED, { id, name: 'shell', args: { command: cmd }, gate: null });
       this.events.emit(EVENTS.TOOL_RUNNING, { id });
       const outFile = this.log.outFilePath(id);
       const result = await runShell(cmd, {

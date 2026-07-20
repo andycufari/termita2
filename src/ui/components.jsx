@@ -86,14 +86,31 @@ const TOOL_ICON = { shell: '$', write: glyphs.bolt, read: '📖', grep: '🔍', 
 
 export function ToolCard({ name, args, danger, status, awaiting }) {
   const isDanger = !!danger;
-  const borderColor = isDanger ? theme.danger : status === 'done' ? theme.borderDim : theme.border;
-  const title = name;
   const cmd = name === 'shell' ? args.command
     : name === 'write' ? args.path
     : name === 'websearch' ? args.query
     : (args.path || args.pattern);
   const why = args.why;
+  const icon = TOOL_ICON[name] || '·';
 
+  // COMPACT by default: one line, no box. A transcript is mostly a list of
+  // commands, and a 5-row bordered card each — plus a repeated "why" — buried the
+  // actual content (a screenful held ~5 commands). The box is reserved for the
+  // cases that genuinely need attention: a danger flag, or a pending approval.
+  if (!isDanger && !awaiting) {
+    const dim = status === 'done';
+    return (
+      <Box paddingLeft={2}>
+        <Text color={dim ? theme.borderDim : theme.brandDim}>{name} </Text>
+        <Text color={dim ? theme.okDim : theme.ok}>{icon} </Text>
+        <Text color={dim ? theme.dim : theme.text}>{cmd}</Text>
+        {name === 'read' && args.range ? <Text color={theme.dim}> ({args.range})</Text> : null}
+      </Box>
+    );
+  }
+
+  // Expanded: danger or awaiting a decision — worth the space and the border.
+  const borderColor = isDanger ? theme.danger : theme.border;
   return (
     <Box flexDirection="column" paddingLeft={2} marginBottom={awaiting ? 0 : 1}>
       <Box
@@ -103,10 +120,10 @@ export function ToolCard({ name, args, danger, status, awaiting }) {
         paddingX={1}
       >
         <Text color={isDanger ? theme.danger : theme.brandDim} bold>
-          {isDanger ? `${glyphs.skull} ${title}  DANGER` : title}
+          {isDanger ? `${glyphs.skull} ${name}  DANGER` : name}
         </Text>
         <Text color={isDanger ? theme.danger : theme.ok}>
-          {TOOL_ICON[name] || '·'} <Text color={theme.text}>{cmd}</Text>
+          {icon} <Text color={theme.text}>{cmd}</Text>
         </Text>
         {name === 'read' && args.range && <Text color={theme.dim}>  range {args.range}</Text>}
         {why && <Text color={theme.dim} italic>{why}</Text>}

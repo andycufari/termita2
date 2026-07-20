@@ -68,7 +68,8 @@ function itemRows(it, cols) {
       return 1 + body + 1 + (it.reasoning ? 1 : 0);
     }
     case 'output': return wrap(it.text, 4);
-    case 'tool': return 2;
+    // compact card = 1 row; danger/awaiting expands to a bordered box (~5)
+    case 'tool': return it.danger || it.status === 'proposed' ? 5 : 1;
     case 'tooldone': return 1;
     case 'notice': return wrap(it.text, 2);
     case 'error': return wrap(it.message, 2) + 2;
@@ -912,6 +913,32 @@ export default function App({ engine, config, provider, needsSetup }) {
   const modalOpen = !!(shareMenu || rewind || picker || setupOpen);
   const modalWidth = Math.min(72, Math.max(40, columns - 8));
 
+  // Transient status that used to live in the bottom chrome. Rendered inside the
+  // chat pane's footer instead: these blink in and out constantly (every turn,
+  // every command), and from the chrome each one pushed BOTH panes up a row. The
+  // pane absorbs the space, so the layout stays still.
+  const liveIndicators = (
+    <>
+      {runningTool && (
+        <RunningIndicator tool={runningTool} lastOutputAt={lastOutputAt} width={chatWidth} />
+      )}
+      {busy && !toolRunning && !stream && !pending && !editing && (
+        <Box paddingLeft={1}>
+          <Spinner label={status || 'thinking'} />
+          <Text color={theme.faint}> </Text>
+          {busyAt ? <ElapsedInline since={busyAt} /> : null}
+        </Box>
+      )}
+      {queue.length > 0 && (
+        <Box flexDirection="column" paddingLeft={1}>
+          {queue.map((q, i) => (
+            <Text key={i} color={theme.faint}>⤷ queued: {q.length > 60 ? q.slice(0, 60) + '…' : q}</Text>
+          ))}
+        </Box>
+      )}
+    </>
+  );
+
   const modalRegion = shareMenu ? (
     <Modal
       width={modalWidth}
@@ -981,6 +1008,7 @@ export default function App({ engine, config, provider, needsSetup }) {
                 dimColor={theme.faint}
               />
             ) : null}
+            footer={liveIndicators}
             header={startIdx === 0 ? <Banner version={VERSION} firstRun={needsSetup} columns={chatWidth} /> : null}
           >
             {shownItems.map((it) => (
@@ -1048,29 +1076,11 @@ export default function App({ engine, config, provider, needsSetup }) {
           so opening one no longer shoves the panes up the screen. */}
       {modalOpen ? null : (
         <>
-          {/* live indicators: a running command, OR the model thinking (not both).
-              Output itself streams into scrollback above as 'output' lines. The
-              running indicator shows WHICH command is running + a "silent for Ns"
-              nudge, so a long/quiet command never looks like termita froze. */}
-          {runningTool && (
-            <RunningIndicator tool={runningTool} lastOutputAt={lastOutputAt} width={columns} />
-          )}
-          {busy && !toolRunning && !stream && !pending && !editing && (
-            <Box paddingLeft={2}>
-              <Spinner label={status || 'thinking'} />
-              <Text color={theme.faint}> </Text>
-              {busyAt ? <ElapsedInline since={busyAt} /> : null}
-            </Box>
-          )}
-
-          {/* queued messages (typed while busy) — sent in order when free */}
-          {queue.length > 0 && (
-            <Box flexDirection="column" paddingLeft={2}>
-              {queue.map((q, i) => (
-                <Text key={i} color={theme.faint}>⤷ queued: {q.length > 60 ? q.slice(0, 60) + '…' : q}</Text>
-              ))}
-            </Box>
-          )}
+          {/* Live indicators (thinking spinner, running command, queued messages)
+              render INSIDE the chat pane's footer, not here — see `liveIndicators`.
+              They appear and vanish constantly, and in the chrome each one shoved
+              both panes up a row. Inside the pane, the pane absorbs the space and
+              the layout holds still. */}
 
           {/* `/` command autocomplete — floats above the input while typing */}
           {showCmdMenu && <CommandMenu matches={cmdMatches} selected={cmdSel} width={columns} />}
