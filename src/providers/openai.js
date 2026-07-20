@@ -105,7 +105,19 @@ export class OpenAIProvider {
       });
     } catch (err) {
       if (err.name === 'AbortError') throw err;
-      throw new ProviderError(`can't reach ${this.base} — is ${this.label} up?`, { kind: 'connection' });
+      // Don't blame the endpoint for every fetch failure — a slow local model
+      // (big context, cold load) surfaces as a TIMEOUT, not a refused socket,
+      // and "is it up?" sends you debugging a server that's fine. Report what
+      // actually happened; keep the reachability hint for real connect errors.
+      const code = err.cause?.code || err.code;
+      if (err.name === 'TimeoutError' || code === 'UND_ERR_HEADERS_TIMEOUT' || code === 'UND_ERR_BODY_TIMEOUT') {
+        throw new ProviderError(
+          `${this.label} didn't respond in time — the model may still be loading or generating. Try a smaller model, or lower contextSize.`,
+          { kind: 'timeout' },
+        );
+      }
+      const why = code ? ` (${code})` : '';
+      throw new ProviderError(`can't reach ${this.base}${why} — is ${this.label} up?`, { kind: 'connection' });
     }
 
     if (res.status === 401) throw new ProviderError('401 unauthorized — check your API key', { kind: 'auth' });

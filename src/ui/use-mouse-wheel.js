@@ -11,15 +11,21 @@
 // `stdin.read` itself: strip mouse reports out of what read() returns, handle
 // the wheel/esc here, and hand Ink only the cleaned bytes. Nothing leaks.
 //
-// SGR (1006) + button-event (1002): SGR encodes coords as decimal in a
-// `\x1b[<b;x;yM|m` sequence; 1002 reports buttons — wheel ticks are 64 (up) /
-// 65 (down); drag/move (32/35) we drop. Works in iTerm2, Terminal.app (with
+// SGR (1006) + normal tracking (1000): SGR encodes coords as decimal in a
+// `\x1b[<b;x;yM|m` sequence; 1000 reports button events — wheel ticks are 64 (up)
+// / 65 (down); plain clicks (0) we drop. Works in iTerm2, Terminal.app (with
 // Mouse Reporting on), kitty, Konsole, gnome-terminal, Windows Terminal, xterm.
 import { useEffect } from 'react';
 import { useStdin, useStdout } from 'ink';
 
-const ENABLE = '\x1b[?1002h\x1b[?1006h'; // button-event tracking + SGR extended
-const DISABLE = '\x1b[?1006l\x1b[?1002l';
+// 1000 (normal tracking), NOT 1002 (button-event tracking). Both deliver wheel
+// ticks, but 1002 also reports motion-while-pressed — i.e. it eats DRAG, which is
+// exactly what the terminal needs for native text selection. With 1000 the wheel
+// still scrolls the transcript while drag-to-select/copy keeps working, so this
+// is no longer an either/or. (Alt-screen has no native scrollback, so turning
+// capture off entirely leaves no way to scroll at all — see cli.js.)
+const ENABLE = '\x1b[?1000h\x1b[?1006h'; // normal tracking + SGR extended coords
+const DISABLE = '\x1b[?1006l\x1b[?1000l';
 
 const WHEEL_UP = 64;
 const WHEEL_DOWN = 65;
@@ -43,10 +49,11 @@ function scrub(str) {
 
 // onWheel(delta) — net wheel ticks: + = scroll UP (older), - = DOWN (latest).
 // onEscape() — fired on a lone Esc byte (interrupt a running command).
-// enabled — when false, we DON'T capture the mouse (no `1002h`), so the terminal
-//   keeps native drag-to-select / copy-paste. Wheel scroll then falls back to the
-//   terminal's own scrollback. We still wrap read() to catch Esc and scrub any
-//   stray reports, but capture stays off. Toggle with /mouse.
+// enabled — when false we don't capture the mouse at all. Note alt-screen has NO
+//   native scrollback, so that means no wheel scrolling whatsoever (PgUp/PgDn/
+//   Home/End still work) — it's an escape hatch for terminals that mishandle
+//   mode 1000, not the way to get text selection: mode 1000 already leaves drag
+//   to the terminal. We still wrap read() to catch Esc. Toggle with /mouse.
 export function useMouseWheel(onWheel, onEscape, enabled = true) {
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   const { stdout } = useStdout();

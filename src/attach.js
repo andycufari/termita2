@@ -34,14 +34,43 @@ const IMAGE_LIMIT = 20 * 1024 * 1024; // 20MB base64 sanity cap
 // Pull `@path` tokens out of a line. Supports `@"quoted path"`, `@'…'`, and bare
 // `@path/with/no/spaces`. Returns [{ raw, rawToken, spec }] where rawToken is the
 // exact substring to strip from the text and spec is the resolved-ish path.
+// Bare paths that LOOK like a file worth attaching: absolute (/x, ~/x), explicit
+// relative (./x, ../x), or any token with a known image extension. Deliberately
+// narrow — a bare `notes.md` stays literal text, because prose mentions filenames
+// constantly and silently inhaling them would be worse than making you type `@`.
+// Quoted forms catch paths with spaces.
+const BARE_RE = new RegExp(
+  '(?:"([^"]+\\.[A-Za-z0-9]{1,5})"' +          // "with spaces.png"
+  "|'([^']+\\.[A-Za-z0-9]{1,5})'" +            // 'with spaces.png'
+  '|((?:~|\\.{1,2})?/[^\\s"\'`]+)' +           // /abs, ~/x, ./x, ../x
+  '|([^\\s"\'`/]+\\.(?:png|jpe?g|gif|webp|bmp)))',  // shot.png (image ext only)
+  'gi',
+);
+
 function findMentions(text) {
   const out = [];
-  const re = /@(?:"([^"]+)"|'([^']+)'|([^\s"']+))/g;
+  const seen = new Set();
+  const add = (rawToken, spec) => {
+    if (!spec || seen.has(rawToken)) return;
+    seen.add(rawToken);
+    out.push({ rawToken, spec });
+  };
+
+  // Explicit @mentions win — collect them first so their spans are claimed.
+  const at = /@(?:"([^"]+)"|'([^']+)'|([^\s"']+))/g;
+  const claimed = [];
   let m;
-  while ((m = re.exec(text)) !== null) {
-    const spec = m[1] ?? m[2] ?? m[3] ?? '';
-    if (!spec) continue;
-    out.push({ rawToken: m[0], spec });
+  while ((m = at.exec(text)) !== null) {
+    claimed.push([m.index, m.index + m[0].length]);
+    add(m[0], m[1] ?? m[2] ?? m[3] ?? '');
+  }
+
+  // Then bare paths, skipping anything already inside an @mention (so
+  // `@/tmp/a.png` isn't also matched as the bare path `/tmp/a.png`).
+  const covered = (i) => claimed.some(([s, e]) => i >= s && i < e);
+  while ((m = BARE_RE.exec(text)) !== null) {
+    if (covered(m.index)) continue;
+    add(m[0], m[1] ?? m[2] ?? m[3] ?? m[4] ?? '');
   }
   return out;
 }

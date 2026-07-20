@@ -331,12 +331,13 @@ export default function App({ engine, config, provider, needsSetup }) {
     let res = {};
     await suspendTerminal(async () => {
       // drop our SGR mouse capture while the child owns the terminal
-      try { stdout.write('\x1b[?1006l\x1b[?1002l'); } catch { /* mouse off */ }
+      // must match ENABLE/DISABLE in use-mouse-wheel.js (mode 1000, not 1002)
+      try { stdout.write('\x1b[?1006l\x1b[?1000l'); } catch { /* mouse off */ }
       try {
         res = await runDirectProcess(cmd, { ...opts, tty: true });
       } finally {
         // re-arm mouse capture (Ink re-enters the alt-screen + repaints for us)
-        if (mouseCaptureRef.current) { try { stdout.write('\x1b[?1002h\x1b[?1006h'); } catch { /* mouse on */ } }
+        if (mouseCaptureRef.current) { try { stdout.write('\x1b[?1000h\x1b[?1006h'); } catch { /* mouse on */ } }
       }
     });
     return res;
@@ -480,8 +481,9 @@ export default function App({ engine, config, provider, needsSetup }) {
     if (announce) push({ kind: 'notice', text: `context window → ${n.toLocaleString()} tokens`, level: 'ok' });
   }, [config, push]);
 
-  // Toggle mouse capture: ON = wheel scrolls the transcript; OFF = native
-  // drag-to-select / copy-paste (wheel falls back to terminal scrollback).
+  // Toggle mouse capture. ON (mode 1000) = wheel scrolls the transcript AND
+  // drag-to-select still works. OFF = no wheel scrolling at all (alt-screen has
+  // no native scrollback) — PgUp/PgDn/Home/End remain the way to move.
   const doToggleMouse = useCallback((force) => {
     setMouseCapture((cur) => {
       const next = typeof force === 'boolean' ? force : !cur;
@@ -489,8 +491,8 @@ export default function App({ engine, config, provider, needsSetup }) {
       config.ui.mouseCapture = next;
       saveConfig(config);
       push({ kind: 'notice', text: next
-        ? 'mouse capture ON — wheel scrolls (hold Option/Shift to select text)'
-        : 'mouse capture OFF — drag to select / copy-paste (wheel uses terminal scrollback)',
+        ? 'mouse capture ON — wheel scrolls, drag still selects text'
+        : 'mouse capture OFF — no wheel scrolling; use PgUp/PgDn/Home/End',
         level: 'ok' });
       return next;
     });
@@ -837,16 +839,29 @@ export default function App({ engine, config, provider, needsSetup }) {
   // Walk items from the bottom, dropping `clampedScroll` rows off the end, then
   // keeping ~a viewport of rows above that. Over-include by a couple items so the
   // flex-end clip never shows a half-empty screen at the boundaries.
+  // Walk up from the bottom accumulating rows until we've covered the rows we're
+  // scrolled past. The boundary item is usually only PARTLY scrolled off — the
+  // old code dropped it whole, which quantized scrolling to item boundaries and
+  // made the wheel jump 10-17 rows at a time ("page to page", losing content).
+  // We keep it and record how many of its trailing rows to clip instead.
   const bottomDrop = clampedScroll;         // rows hidden below the viewport
   let acc = 0;
   let endIdx = allItems.length;             // exclusive; last item to show + 1
+  let clipBottom = 0;                       // rows to hide off the LAST shown item
   for (let i = allItems.length - 1; i >= 0; i--) {
-    if (acc >= bottomDrop) { endIdx = i + 1; break; }
-    acc += rowsPerItem[i];
-    if (i === 0) endIdx = 0;
+    const next = acc + rowsPerItem[i];
+    if (next >= bottomDrop) {
+      // item i straddles the boundary: show it, clip the rows below the fold
+      endIdx = i + 1;
+      clipBottom = bottomDrop - acc;
+      break;
+    }
+    acc = next;
+    if (i === 0) { endIdx = 0; clipBottom = 0; }
   }
-  // fill a viewport's worth of rows above endIdx
-  let need = viewport + 2;
+  // Fill a viewport's worth of rows above endIdx, accounting for the clipped
+  // rows so the visible row count stays constant as you scroll.
+  let need = viewport + clipBottom + 2;
   let startIdx = endIdx;
   for (let i = endIdx - 1; i >= 0 && need > 0; i--) { need -= rowsPerItem[i]; startIdx = i; }
   const shownItems = allItems.slice(startIdx, endIdx);
@@ -859,7 +874,11 @@ export default function App({ engine, config, provider, needsSetup }) {
           the latest content (pinned to bottom). Alt-screen repaints the whole
           buffer each frame, so resize can't strand ghosts here. */}
       <Box flexGrow={1} flexShrink={1} flexDirection="column" overflowY="hidden" justifyContent="flex-end">
-        <Box flexDirection="column" flexShrink={0}>
+        {/* marginBottom={-clipBottom} slides the content DOWN past the flex-end
+            fold so overflow:hidden cuts the partly-scrolled boundary item's
+            trailing rows. This is what makes scrolling row-continuous instead of
+            snapping item-to-item. */}
+        <Box flexDirection="column" flexShrink={0} marginBottom={-clipBottom}>
           {/* Banner only when the oldest content is in view — otherwise it would
               wrongly pin to the top of every scrolled-into-the-middle window. */}
           {startIdx === 0 && <Banner version={VERSION} firstRun={needsSetup} columns={columns} />}
@@ -1050,6 +1069,7 @@ export default function App({ engine, config, provider, needsSetup }) {
 // must be handled in THIS component or they're swallowed by the text field.
 function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, setInput, onEscape, cmdMatches = [], cmdSel = 0, setCmdSel }) {
   const menuOpen = cmdMatches.length > 0;
+  const draft = useRef(''); // unsent text stashed when ↑ enters history
   const highlighted = () => cmdMatches[cmdSel] || cmdMatches[0];
   const complete = (cmd) => setInput('/' + cmd.name + ' '); // fill the command, leave room for args
 
@@ -1086,14 +1106,21 @@ function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, se
     //  - trailing "\" on submit (handled in handleSubmit below).
     if (key.return && (key.shift || key.meta)) { onChange(value + '\n'); return; }
     if (key.ctrl && ch === 'j') { onChange(value + '\n'); return; }
+    // History nav NEVER destroys an unsent draft. Rules:
+    //  - ↓ on a live draft (not navigating) is a no-op — a stray press used to
+    //    setInput('') and silently eat everything you'd typed.
+    //  - ↑ stashes the draft before the first overwrite; ↓ back past the newest
+    //    entry restores it verbatim.
     if (key.upArrow) {
       const h = history.current;
       if (h.length === 0) return;
+      if (histIdx.current === -1) draft.current = value; // entering history: stash
       histIdx.current = Math.min(histIdx.current + 1, h.length - 1);
       setInput(h[histIdx.current]);
     } else if (key.downArrow) {
       const h = history.current;
-      if (histIdx.current <= 0) { histIdx.current = -1; setInput(''); }
+      if (histIdx.current < 0) return; // not in history — leave the draft alone
+      if (histIdx.current === 0) { histIdx.current = -1; setInput(draft.current); }
       else { histIdx.current -= 1; setInput(h[histIdx.current]); }
     }
   });
@@ -1106,6 +1133,7 @@ function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, se
     // stale value. This is what fixed "double-enter does nothing / menu sticks".
     if (menuOpen) return;
     if (v.endsWith('\\')) { onChange(v.slice(0, -1) + '\n'); return; }
+    draft.current = ''; // sent — nothing left to restore
     onSubmit(v);
   };
 
