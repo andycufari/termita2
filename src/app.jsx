@@ -19,6 +19,7 @@ import { runSlash } from './slash.js';
 import Setup from './ui/setup.jsx';
 import { useTerminalSize } from './ui/use-terminal-size.js';
 import { useMouseWheel } from './ui/use-mouse-wheel.js';
+import { usePaneScroll } from './ui/pane-scroll.js';
 import { matchCommands } from './ui/commands.js';
 import { VERSION } from './cli.js';
 
@@ -119,23 +120,19 @@ export default function App({ engine, config, provider, needsSetup }) {
 
   const { columns, rows } = useTerminalSize(); // reactive terminal size (responsive)
 
-  // In-app transcript scroll (alt-screen has no native scrollback). `scrollUp`
-  // is how many ROWS we've scrolled UP from the bottom; 0 = pinned to bottom
-  // (auto-follows new output). Rows — not items — because items have wildly
-  // different heights (a wrapped message vs a one-line output), so scrolling by
-  // item count lurched unevenly and Home sliced the list empty (→ blank screen,
-  // the "goes to the top and bypasses history" bug). We clamp to the total
-  // content height minus a viewport so you can never scroll past the oldest line.
-  const [scrollUp, setScrollUp] = useState(0);
-  const maxScrollRef = useRef(0);   // total rows - viewport; set during render
-  const totalRowsRef = useRef(0);   // estimated rows of the whole transcript
-  const viewportRef = useRef(10);   // estimated rows the transcript viewport can show
-
-  // Step the scroll by N ROWS (clamped to [0, maxScroll]): +up = older, -down =
-  // latest. Shared by the wheel, PgUp/PgDn and Ctrl+↑/↓ so all stay consistent.
-  const scrollBy = useCallback((step) => {
-    setScrollUp((s) => Math.max(0, Math.min(maxScrollRef.current, s + step)));
-  }, []);
+  // In-app transcript scroll (alt-screen has no native scrollback), measured in
+  // ROWS not items — see src/ui/pane-scroll.js for the windowing math and why.
+  // The hook owns scrollUp, the refs the key handlers read, and the growth anchor.
+  // It's per-pane by construction so goncho can run two independent panes.
+  const chatScroll = usePaneScroll({
+    items,
+    columns,
+    rows,
+    measure: itemRows,
+    extraRows: BANNER_ROWS,
+    chromeRows: CHROME_ROWS,
+  });
+  const { scrollUp, setScrollUp, scrollBy, maxScrollRef, viewportRef } = chatScroll;
 
   const inputHistory = useRef([]);
   const histIdx = useRef(-1);
@@ -195,21 +192,11 @@ export default function App({ engine, config, provider, needsSetup }) {
   // reset the autocomplete highlight whenever the typed command changes
   useEffect(() => { setCmdSel(0); }, [input]);
 
-  // Keep the scroll position stable when the transcript grows. If we're scrolled
-  // up and new content arrives, bump `scrollUp` by the ROWS added so the view
-  // stays anchored on the same content instead of drifting toward the bottom.
-  // (When pinned to bottom, scrollUp stays 0 and auto-follows.) Shrinks (/clear,
-  // rewind) are handled by the clamp against maxScroll during render.
-  const prevTotalRows = useRef(0);
-  useEffect(() => {
-    const total = totalRowsRef.current;
-    const delta = total - prevTotalRows.current;
-    prevTotalRows.current = total;
-    if (delta > 0) setScrollUp((s) => (s > 0 ? s + delta : 0)); // anchored only when already scrolled up
-  }, [items]);
-
   const patchItem = useCallback((id, patch) => {
-    setItems((cur) => cur.map((it) => (it.toolId === id ? { ...it, ...patch } : it)));
+    // kind==='tool' is REQUIRED: output/tooldone items now carry toolId too, and
+    // without this guard a patch would spray tool-card fields across every output
+    // line of that call.
+    setItems((cur) => cur.map((it) => (it.kind === 'tool' && it.toolId === id ? { ...it, ...patch } : it)));
   }, []);
 
   // --- Engine event subscription -------------------------------------------
@@ -232,19 +219,20 @@ export default function App({ engine, config, provider, needsSetup }) {
           setStream(null);
           // create (or update) a tool card item
           setItems((cur) => {
-            const existing = cur.find((it) => it.toolId === ev.id);
+            // kind==='tool' guards below: output/tooldone items share this toolId.
+            const existing = cur.find((it) => it.kind === 'tool' && it.toolId === ev.id);
             const data = {
               kind: 'tool', toolId: ev.id, name: ev.name, args: ev.args,
               danger: ev.gate?.danger || null, status: 'proposed',
             };
-            if (existing) return cur.map((it) => (it.toolId === ev.id ? { ...it, ...data } : it));
+            if (existing) return cur.map((it) => (it.kind === 'tool' && it.toolId === ev.id ? { ...it, ...data } : it));
             return appendItems(cur, [{ _k: uid(), ...data }]);
           });
           break;
         case EVENTS.TOOL_AWAIT:
           setSelected(0);
           setItems((cur) => {
-            const it = cur.find((x) => x.toolId === ev.id);
+            const it = cur.find((x) => x.kind === 'tool' && x.toolId === ev.id);
             if (it) setPending({ id: ev.id, name: it.name, args: it.args, danger: it.danger });
             return cur;
           });
@@ -265,7 +253,10 @@ export default function App({ engine, config, provider, needsSetup }) {
           outputBuffers.current[ev.id] = partial;
           if (parts.length) {
             setLastOutputAt(Date.now()); // we got fresh output → not silent
-            setItems((cur) => appendItems(cur, parts.map((line) => ({ _k: uid(), kind: 'output', text: line }))));
+            // toolId ties each output line back to its tool card. Without it these
+            // relate only by array adjacency, which can't survive routing output to
+            // a separate pane (goncho) or jumping to a tool call's anchor.
+            setItems((cur) => appendItems(cur, parts.map((line) => ({ _k: uid(), kind: 'output', toolId: ev.id, text: line }))));
           }
           break;
         }
@@ -275,8 +266,8 @@ export default function App({ engine, config, provider, needsSetup }) {
           delete outputBuffers.current[ev.id]; // release the per-tool buffer (was retained forever)
           setItems((cur) => {
             const add = [];
-            if (partial && partial.length) add.push({ _k: uid(), kind: 'output', text: partial });
-            add.push({ _k: uid(), kind: 'tooldone', exitCode: ev.meta?.exitCode, interrupted: ev.meta?.interrupted });
+            if (partial && partial.length) add.push({ _k: uid(), kind: 'output', toolId: ev.id, text: partial });
+            add.push({ _k: uid(), kind: 'tooldone', toolId: ev.id, exitCode: ev.meta?.exitCode, interrupted: ev.meta?.interrupted });
             return appendItems(cur, add);
           });
           patchItem(ev.id, { status: 'done' });
@@ -815,57 +806,10 @@ export default function App({ engine, config, provider, needsSetup }) {
   // colour the gauge by how full the window is: dim < 60% < amber < 85% < red
   const ctxColor = ctxPct >= 85 ? theme.danger : ctxPct >= 60 ? theme.warn : theme.dim;
 
-  // Transcript items shown in the scroll viewport. Alt-screen has no native
-  // scrollback, so the whole transcript is one in-app-scrolled region measured in
-  // ROWS. We estimate each item's rendered height, sum it, and derive:
-  //   viewport  = rows the transcript area can show (screen minus fixed chrome)
-  //   maxScroll = total rows - viewport (how far up you can go; clamps Home)
-  // then window the items so exactly the rows around the scroll offset render.
-  // The Box below still uses overflow:hidden + flex-end to pixel-clip the edges,
-  // but windowing by rows here is what makes the wheel move evenly and stops Home
-  // from slicing the list empty (the old item-count math did — that was the bug).
-  const allItems = items; // proposed/running/done all render the same in-band
-  const rowsPerItem = allItems.map((it) => itemRows(it, columns));
-  const totalRows = rowsPerItem.reduce((a, b) => a + b, 0) + BANNER_ROWS;
-  // Fixed chrome below the transcript (input box + footer + a little slack). The
-  // transcript viewport gets whatever's left of the screen height.
-  const viewport = Math.max(3, rows - CHROME_ROWS);
-  const maxScroll = Math.max(0, totalRows - viewport);
-  const clampedScroll = Math.min(scrollUp, maxScroll);
-  totalRowsRef.current = totalRows;
-  viewportRef.current = viewport;
-  maxScrollRef.current = maxScroll;
-
-  // Walk items from the bottom, dropping `clampedScroll` rows off the end, then
-  // keeping ~a viewport of rows above that. Over-include by a couple items so the
-  // flex-end clip never shows a half-empty screen at the boundaries.
-  // Walk up from the bottom accumulating rows until we've covered the rows we're
-  // scrolled past. The boundary item is usually only PARTLY scrolled off — the
-  // old code dropped it whole, which quantized scrolling to item boundaries and
-  // made the wheel jump 10-17 rows at a time ("page to page", losing content).
-  // We keep it and record how many of its trailing rows to clip instead.
-  const bottomDrop = clampedScroll;         // rows hidden below the viewport
-  let acc = 0;
-  let endIdx = allItems.length;             // exclusive; last item to show + 1
-  let clipBottom = 0;                       // rows to hide off the LAST shown item
-  for (let i = allItems.length - 1; i >= 0; i--) {
-    const next = acc + rowsPerItem[i];
-    if (next >= bottomDrop) {
-      // item i straddles the boundary: show it, clip the rows below the fold
-      endIdx = i + 1;
-      clipBottom = bottomDrop - acc;
-      break;
-    }
-    acc = next;
-    if (i === 0) { endIdx = 0; clipBottom = 0; }
-  }
-  // Fill a viewport's worth of rows above endIdx, accounting for the clipped
-  // rows so the visible row count stays constant as you scroll.
-  let need = viewport + clipBottom + 2;
-  let startIdx = endIdx;
-  for (let i = endIdx - 1; i >= 0 && need > 0; i--) { need -= rowsPerItem[i]; startIdx = i; }
-  const shownItems = allItems.slice(startIdx, endIdx);
-  const atBottom = clampedScroll === 0;
+  // The windowed slice of the transcript to render, computed by usePaneScroll
+  // above. `clipBottom` is applied as a negative marginBottom below — that's what
+  // makes scrolling row-continuous instead of snapping item-to-item.
+  const { shownItems, startIdx, clipBottom, maxScroll, atBottom, clampedScroll } = chatScroll;
 
   return (
     <Box flexDirection="column" paddingX={1} height={rows}>
