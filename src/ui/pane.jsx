@@ -12,7 +12,7 @@
 // Verified: two of these side by side in a flexDirection="row" container clip
 // INDEPENDENTLY, so each pane scrolls without disturbing the other.
 import React from 'react';
-import { Box } from 'ink';
+import { Box, Text } from 'ink';
 
 export function Pane({
   width,          // columns for THIS pane (undefined = fill available)
@@ -21,8 +21,9 @@ export function Pane({
   borderColor,
   focusColor,
   clipBottom = 0,
-  header = null,  // rendered above the scrolling region (e.g. a banner)
-  footer = null,  // rendered below it, inside the pane (e.g. a prompt)
+  title = null,   // fixed one-line label pinned to the TOP of the pane
+  header = null,  // rendered above the scrolling region, scrolls with it
+  footer = null,  // rendered below it, inside the pane
   children,
 }) {
   // The FOCUSED pane gets a heavier border as well as its own colour — on a dim
@@ -36,6 +37,10 @@ export function Pane({
     : {};
   return (
     <Box flexDirection="column" width={width} flexGrow={width ? 0 : 1} flexShrink={1} {...border}>
+      {/* Title is OUTSIDE the scrolling region: it stays pinned while content
+          scrolls under it (Norton's pane header). flexShrink={0} so a full pane
+          can never squeeze it away. */}
+      {title && <Box flexShrink={0}>{title}</Box>}
       <Box flexGrow={1} flexShrink={1} flexDirection="column" overflowY="hidden" justifyContent="flex-end">
         <Box flexDirection="column" flexShrink={0} marginBottom={-clipBottom}>
           {header}
@@ -43,6 +48,22 @@ export function Pane({
         </Box>
       </Box>
       {footer}
+    </Box>
+  );
+}
+
+// A pane's header line: a label on the left, live context on the right, clipped
+// to the pane width. Middle-truncates the context (a path's TAIL and a model
+// name's HEAD are the informative ends) rather than letting it wrap and shove
+// the layout around.
+export function PaneTitle({ label, context, width, color, dimColor }) {
+  const avail = Math.max(8, (width || 40) - label.length - 4);
+  let shown = context || '';
+  if (shown.length > avail) shown = `…${shown.slice(-(avail - 1))}`;
+  return (
+    <Box paddingX={1}>
+      <Text color={color} bold>{label}</Text>
+      <Text color={dimColor}>{shown ? `  ${shown}` : ''}</Text>
     </Box>
   );
 }

@@ -14,13 +14,16 @@ import {
 import { saveConfig } from './config/config.js';
 import { setCognito as memSetCognito } from './config/memory.js';
 import { runDirectProcess, isInteractive } from './tools/interactive.js';
+import { shellState } from './tools/shell.js';
+import { homedir } from 'node:os';
 import { buildUserContent } from './attach.js';
 import { runSlash } from './slash.js';
 import Setup from './ui/setup.jsx';
 import { useTerminalSize } from './ui/use-terminal-size.js';
 import { useMouseWheel } from './ui/use-mouse-wheel.js';
 import { usePaneScroll } from './ui/pane-scroll.js';
-import { Pane } from './ui/pane.jsx';
+import { Pane, PaneTitle } from './ui/pane.jsx';
+import { Modal, ModalItem } from './ui/modal.jsx';
 import { matchCommands } from './ui/commands.js';
 import { VERSION } from './cli.js';
 
@@ -114,6 +117,10 @@ export default function App({ engine, config, provider, needsSetup }) {
   // border colour, which prompt is MOUNTED (see below), and where scroll keys go.
   const [focus, setFocus] = useState('chat'); // 'chat' | 'shell'
   const [shellInput, setShellInput] = useState('');
+  // shellState.cwd is a plain module value the engine mutates after each command
+  // (`!cd` sticks), so React won't re-render on it. Mirror it into state whenever
+  // a turn ends, which is when it can have changed.
+  const [shellCwd, setShellCwd] = useState(() => shellState.cwd);
   const shellHistory = useRef([]);
   const shellHistIdx = useRef(-1);
   const [queue, setQueue] = useState([]); // messages typed while busy, sent next turn
@@ -329,6 +336,7 @@ export default function App({ engine, config, provider, needsSetup }) {
         case EVENTS.TURN_DONE:
           setStream(null);
           setStatus(null);
+          setShellCwd(shellState.cwd); // `cd` may have moved us — refresh the header
           // drain a queued message (typed while busy) -> send it as the next turn
           if (queueRef.current.length > 0) {
             const next = queueRef.current[0];
@@ -897,6 +905,55 @@ export default function App({ engine, config, provider, needsSetup }) {
   // makes scrolling row-continuous instead of snapping item-to-item.
   const { shownItems, startIdx, clipBottom, maxScroll, atBottom, clampedScroll } = chatScroll;
 
+  // goncho: a menu is a DIALOG OVER the panes, not another row stacked above the
+  // input. These used to live in the bottom chrome, so opening one shoved the
+  // panes up the screen. Now they replace the pane region and the layout holds
+  // still. Pane state lives in React above, so the panes return untouched.
+  const modalOpen = !!(shareMenu || rewind || picker || setupOpen);
+  const modalWidth = Math.min(72, Math.max(40, columns - 8));
+
+  const modalRegion = shareMenu ? (
+    <Modal
+      width={modalWidth}
+      title={`!${shareMenu.cmd.length > 40 ? shareMenu.cmd.slice(0, 39) + '…' : shareMenu.cmd} finished${
+        shareMenu.exitCode != null && shareMenu.exitCode !== 0 ? ` (exit ${shareMenu.exitCode})` : ''
+      } — share with termita?`}
+      hint="↑↓ select · enter · f share+output · e silent"
+    >
+      {shareActions.map((a, i) => (
+        <ModalItem key={a.key} selected={i === shareMenu.sel}>{a.label}</ModalItem>
+      ))}
+    </Modal>
+  ) : rewind ? (
+    <Modal width={modalWidth} title="↩ jump back to…" hint="↑↓ select · enter · esc cancel">
+      {rewind.points.map((p, i) => (
+        <ModalItem key={p.idx} selected={i === rewind.sel}>
+          {p.text.length > 64 ? p.text.slice(0, 64) + '…' : p.text}
+        </ModalItem>
+      ))}
+      {/* explicit cancel row: sel === points.length means "stay put". Arrow to it
+          + Enter, or just hit Esc — both close without rewinding. */}
+      <ModalItem selected={rewind.sel === rewind.points.length} color={theme.warn}>
+        cancel — keep going where I am
+      </ModalItem>
+    </Modal>
+  ) : picker ? (
+    /* interactive /model picker: arrow-select a model, no typing the id */
+    <Modal
+      width={modalWidth}
+      title="pick a model"
+      hint={`↑↓ select · enter switch · esc cancel${picker.models.length > PICKER_WINDOW ? `  (${picker.sel + 1}/${picker.models.length})` : ''}`}
+    >
+      {visiblePicker(picker, columns).map(({ id, i }) => (
+        <ModalItem key={id} selected={i === picker.sel}>
+          {id === config.llm.model ? glyphs.check + ' ' : '  '}{clampText(id, modalWidth - 8)}
+        </ModalItem>
+      ))}
+    </Modal>
+  ) : setupOpen ? (
+    <Setup initial={config.llm} onDone={onSetupDone} onCancel={onSetupCancel} />
+  ) : null;
+
   return (
     <Box flexDirection="column" paddingX={1} height={rows}>
       {/* Transcript viewport: flexGrow takes whatever height the live region
@@ -906,7 +963,7 @@ export default function App({ engine, config, provider, needsSetup }) {
       {/* goncho: chat | shell. Two Panes in a row container clip independently
           (verified), so each scrolls without disturbing the other. Below MIN_DUAL
           only the focused pane renders, full width. */}
-      <Box flexGrow={1} flexShrink={1} flexDirection="row">
+      <Box flexGrow={1} flexShrink={1} flexDirection="row" display={modalOpen ? 'none' : 'flex'}>
         {(dual || focus === 'chat') && (
           <Pane
             width={dual ? leftWidth : undefined}
@@ -915,6 +972,15 @@ export default function App({ engine, config, provider, needsSetup }) {
             borderColor={theme.faint}
             focusColor={theme.brand}   /* cyan — you're in termita */
             clipBottom={clipBottom}
+            title={dual ? (
+              <PaneTitle
+                label="termita"
+                context={config.llm.model}
+                width={chatWidth}
+                color={focus === 'chat' ? theme.brand : theme.dim}
+                dimColor={theme.faint}
+              />
+            ) : null}
             header={startIdx === 0 ? <Banner version={VERSION} firstRun={needsSetup} columns={chatWidth} /> : null}
           >
             {shownItems.map((it) => (
@@ -932,6 +998,15 @@ export default function App({ engine, config, provider, needsSetup }) {
             borderColor={theme.faint}
             focusColor={theme.shell}   /* neon green — you're in the shell */
             clipBottom={shellScroll.clipBottom}
+            title={dual ? (
+              <PaneTitle
+                label="shell"
+                context={shellCwd.startsWith(homedir()) ? `~${shellCwd.slice(homedir().length)}` : shellCwd}
+                width={shellWidth}
+                color={focus === 'shell' ? theme.shell : theme.dim}
+                dimColor={theme.faint}
+              />
+            ) : null}
           >
             {shellScroll.shownItems.length === 0 && (
               <Text color={theme.faint}>  shell — tab to switch, type a command (no ! needed)</Text>
@@ -942,6 +1017,15 @@ export default function App({ engine, config, provider, needsSetup }) {
           </Pane>
         )}
       </Box>
+
+      {/* goncho: modal region. Sits where the panes were and takes their space
+          (flexGrow), so a dialog is CENTERED over the layout instead of stacking
+          above the input and shoving everything up. */}
+      {modalOpen && (
+        <Box flexGrow={1} flexShrink={1} flexDirection="column">
+          {modalRegion}
+        </Box>
+      )}
 
       {/* Bottom chrome (indicators, overlays, input, footer). flexShrink={0} so
           it ALWAYS gets its full height — only the transcript viewport above
@@ -960,52 +1044,9 @@ export default function App({ engine, config, provider, needsSetup }) {
       {/* approval bar for the pending tool */}
       {pending && <ApprovalMenu selected={selected} danger={!!pending.danger} />}
 
-      {/* share menu after a plain `!cmd`: its output is already in the transcript
-          above — pick what the model hears. In-app, so no stdin fight. */}
-      {shareMenu ? (
-        <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1} marginBottom={1}>
-          <Text color={theme.brand} bold>
-            {glyphs.bullet} !{shareMenu.cmd.length > 40 ? shareMenu.cmd.slice(0, 39) + '…' : shareMenu.cmd} finished
-            {shareMenu.exitCode != null && shareMenu.exitCode !== 0 ? <Text color={theme.danger}> (exit {shareMenu.exitCode})</Text> : ''}
-            <Text color={theme.faint}> — share with termita?</Text>
-          </Text>
-          {shareActions.map((a, i) => (
-            <Text key={a.key} color={i === shareMenu.sel ? theme.ok : theme.dim} bold={i === shareMenu.sel}>
-              {i === shareMenu.sel ? glyphs.bullet : ' '} {a.label}
-            </Text>
-          ))}
-          <Text color={theme.faint}>  ↑↓ select · enter · f share+output · e silent</Text>
-        </Box>
-      ) : rewind ? (
-        <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1} marginBottom={1}>
-          <Text color={theme.brand} bold>↩ jump back to…</Text>
-          {rewind.points.map((p, i) => (
-            <Text key={p.idx} color={i === rewind.sel ? theme.ok : theme.dim} bold={i === rewind.sel}>
-              {i === rewind.sel ? glyphs.bullet : ' '} {p.text.length > 64 ? p.text.slice(0, 64) + '…' : p.text}
-            </Text>
-          ))}
-          {/* explicit cancel row: sel === points.length means "stay put". Arrow
-              to it + Enter, or just hit Esc — both close without rewinding. */}
-          <Text color={rewind.sel === rewind.points.length ? theme.warn : theme.dim} bold={rewind.sel === rewind.points.length}>
-            {rewind.sel === rewind.points.length ? glyphs.bullet : ' '} cancel — keep going where I am
-          </Text>
-          <Text color={theme.faint}>  ↑↓ select · enter · esc cancel</Text>
-        </Box>
-      ) : picker ? (
-        /* interactive /model picker: arrow-select a model, no typing the id */
-        <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1} marginBottom={1}>
-          <Text color={theme.brand} bold>{glyphs.bullet} pick a model</Text>
-          {visiblePicker(picker, columns).map(({ id, i }) => (
-            <Text key={id} color={i === picker.sel ? theme.ok : theme.dim} bold={i === picker.sel}>
-              {i === picker.sel ? glyphs.bullet : ' '} {id === config.llm.model ? glyphs.check + ' ' : '  '}{clampText(id, columns - 8)}
-            </Text>
-          ))}
-          <Text color={theme.faint}>  ↑↓ select · enter switch · esc cancel  {picker.models.length > PICKER_WINDOW ? `(${picker.sel + 1}/${picker.models.length})` : ''}</Text>
-        </Box>
-      ) : setupOpen ? (
-        /* onboarding wizard takes over the input region when open */
-        <Setup initial={config.llm} onDone={onSetupDone} onCancel={onSetupCancel} />
-      ) : (
+      {/* Menus render as centered dialogs in the modal region ABOVE — not here —
+          so opening one no longer shoves the panes up the screen. */}
+      {modalOpen ? null : (
         <>
           {/* live indicators: a running command, OR the model thinking (not both).
               Output itself streams into scrollback above as 'output' lines. The
