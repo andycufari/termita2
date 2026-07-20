@@ -1,7 +1,7 @@
 // Ink root. Renders the transcript, captures input + approval keys + slash
 // commands, subscribes to engine events. The engine is UI-agnostic; this is the
 // only place that knows about both.
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { EVENTS } from './engine/events.js';
@@ -20,6 +20,7 @@ import Setup from './ui/setup.jsx';
 import { useTerminalSize } from './ui/use-terminal-size.js';
 import { useMouseWheel } from './ui/use-mouse-wheel.js';
 import { usePaneScroll } from './ui/pane-scroll.js';
+import { Pane } from './ui/pane.jsx';
 import { matchCommands } from './ui/commands.js';
 import { VERSION } from './cli.js';
 
@@ -41,6 +42,12 @@ const TRIM_TO = 550; // trim in a batch (not every append) to avoid array churn
 // banner block; CHROME_ROWS is the fixed input+footer area below the transcript.
 const BANNER_ROWS = 9;
 const CHROME_ROWS = 6;
+// The shell pane's chrome is just its prompt line (+ border), not the chat pane's
+// approval bar / command menu / footer stack.
+const SHELL_CHROME_ROWS = 4;
+// Below this width two Norton panes are unusable (~48 columns each wraps code
+// badly), so we render ONE full-width pane and Tab switches which one is visible.
+const MIN_DUAL = 100;
 
 // Estimate how many terminal rows an item renders to, so scrolling can move by
 // rows instead of by items (items vary from 1 row to a dozen). Close enough:
@@ -103,6 +110,12 @@ export default function App({ engine, config, provider, needsSetup }) {
   const [editing, setEditing] = useState(null); // { id, value } when Editing a command
   const [busy, setBusy] = useState(false);
   const [busyAt, setBusyAt] = useState(null);
+  // goncho: which pane owns the keyboard. Both panes always render; focus decides
+  // border colour, which prompt is MOUNTED (see below), and where scroll keys go.
+  const [focus, setFocus] = useState('chat'); // 'chat' | 'shell'
+  const [shellInput, setShellInput] = useState('');
+  const shellHistory = useRef([]);
+  const shellHistIdx = useRef(-1);
   const [queue, setQueue] = useState([]); // messages typed while busy, sent next turn
   const [autoApprove, setAutoApprove] = useState(config.policy.autoApprove);
   const [reasoning, setReasoning] = useState(config.llm.reasoning);
@@ -120,19 +133,56 @@ export default function App({ engine, config, provider, needsSetup }) {
 
   const { columns, rows } = useTerminalSize(); // reactive terminal size (responsive)
 
+  // goncho layout. Two Norton-style panes need real width; below MIN_DUAL we fall
+  // back to ONE full-width pane and Tab switches which pane is VISIBLE rather than
+  // which is focused. (Distinct from `narrow` further down, which only compacts
+  // the footer at <72 — different threshold, different purpose.)
+  const dual = columns >= MIN_DUAL;
+  const leftWidth = dual ? Math.floor(columns / 2) : columns;
+  const rightWidth = dual ? columns - leftWidth : columns;
+  // Width available for CONTENT inside a pane: the border eats 2 columns, and
+  // TranscriptItem/Banner/clampText all size against usable text width.
+  const chatWidth = Math.max(20, (dual ? leftWidth : columns) - (dual ? 4 : 0));
+  const shellWidth = Math.max(20, rightWidth - 4);
+
+  // Split the transcript by kind: the chat pane keeps messages, tool cards and
+  // notices; the shell pane takes command output. They read the SAME items array
+  // (filtered) rather than forking into two — forking would duplicate the trim
+  // logic, the growth anchor and the id generator.
+  const chatItems = useMemo(
+    () => (dual ? items.filter((it) => it.kind !== 'output' && it.kind !== 'tooldone') : items),
+    [items, dual],
+  );
+  const shellItems = useMemo(
+    () => (dual ? items.filter((it) => it.kind === 'output' || it.kind === 'tooldone') : []),
+    [items, dual],
+  );
+
   // In-app transcript scroll (alt-screen has no native scrollback), measured in
   // ROWS not items — see src/ui/pane-scroll.js for the windowing math and why.
   // The hook owns scrollUp, the refs the key handlers read, and the growth anchor.
-  // It's per-pane by construction so goncho can run two independent panes.
+  // One instance per pane: the growth anchor especially MUST be per-pane, or live
+  // shell output would yank the chat pane's scroll position.
   const chatScroll = usePaneScroll({
-    items,
-    columns,
+    items: chatItems,
+    columns: chatWidth,
     rows,
     measure: itemRows,
     extraRows: BANNER_ROWS,
     chromeRows: CHROME_ROWS,
   });
-  const { scrollUp, setScrollUp, scrollBy, maxScrollRef, viewportRef } = chatScroll;
+  const shellScroll = usePaneScroll({
+    items: shellItems,
+    columns: shellWidth,
+    rows,
+    measure: itemRows,
+    extraRows: 0,          // no banner in the shell pane
+    chromeRows: SHELL_CHROME_ROWS,
+  });
+  // Scroll keys act on the FOCUSED pane.
+  const activeScroll = focus === 'shell' ? shellScroll : chatScroll;
+  const { scrollBy, maxScrollRef, viewportRef } = activeScroll;
+  const { scrollUp, setScrollUp } = chatScroll;
 
   const inputHistory = useRef([]);
   const histIdx = useRef(-1);
@@ -437,6 +487,35 @@ export default function App({ engine, config, provider, needsSetup }) {
     engine.send(built.parts || built.text);
   }, [engine, config, provider, push, exit, busy, suspendRunner, pendingShare]);
 
+  // goncho: the shell pane's prompt. This IS the console — no `!` prefix needed,
+  // you just type the command. Routes through the same runBangShell/runBangTty
+  // machinery as `!cmd` so cwd tracking, streaming, logging and Esc-to-abort all
+  // behave identically. Unlike `!cmd` it does NOT open the share menu: output goes
+  // to the pane and stays there; use `!cmd` from the chat pane when you want to
+  // hand a command's output to the model.
+  const submitShell = useCallback(async (raw) => {
+    const cmd = (raw || '').trim();
+    setShellInput('');
+    if (!cmd) return;
+    shellHistory.current.unshift(cmd);
+    shellHistIdx.current = -1;
+    // Shared busy flag (engine.busy guards every run path): a model turn and a
+    // shell command can't overlap. Accepted for Stage 1 — you can still read and
+    // scroll both panes while one is running.
+    if (busy) { push({ kind: 'notice', text: 'busy — wait for the current turn (esc to stop)', level: 'warn' }); return; }
+    setBusy(true);
+    setBusyAt(Date.now());
+    if (isInteractive(cmd)) {
+      // Full-screen programs need the real terminal, and suspendTerminal tears
+      // down the ENTIRE Ink render — there's no partial suspend, so both panes go
+      // away and repaint on exit. Warn first so the takeover isn't jarring.
+      push({ kind: 'notice', text: `suspending panes for ${cmd.split(/\s+/)[0]}…`, level: 'dim' });
+      await engine.runBangTty(cmd, { suspendRunner });
+    } else {
+      await engine.runBangShell(cmd);
+    }
+  }, [engine, busy, push, suspendRunner]);
+
   const doToggleAuto = useCallback(() => {
     setAutoApprove((cur) => {
       const next = !cur;
@@ -734,12 +813,16 @@ export default function App({ engine, config, provider, needsSetup }) {
       return;
     }
 
-    // Tab toggles auto-approve — UNLESS the `/` command menu is open, where Tab
-    // completes the highlighted command (handled in PromptInput). We recompute
-    // the menu state inline from `input` (not the captured showCmdMenu) so a
-    // stale closure can't let Tab BOTH toggle auto AND complete at once.
+    // goncho: Tab SWITCHES PANES; auto-approve moved to Shift+Tab. Both arrive as
+    // key.tab — Ink reports Shift+Tab (\x1b[Z) as {name:'tab', shift:true}, which
+    // is verified reliable, so one branch separates them.
+    // The `/` menu still owns a plain Tab (PromptInput completes the highlighted
+    // command). We recompute the menu state inline from `input` rather than using
+    // the captured showCmdMenu so a stale closure can't let Tab BOTH switch panes
+    // AND complete at once.
     if (key.tab) {
-      if (matchCommands(input).length === 0) doToggleAuto();
+      if (key.shift) { doToggleAuto(); return; }
+      if (matchCommands(input).length === 0) setFocus((f) => (f === 'chat' ? 'shell' : 'chat'));
       return;
     }
 
@@ -817,21 +900,60 @@ export default function App({ engine, config, provider, needsSetup }) {
           below doesn't use; overflowY:hidden + justifyContent:flex-end clip to
           the latest content (pinned to bottom). Alt-screen repaints the whole
           buffer each frame, so resize can't strand ghosts here. */}
-      <Box flexGrow={1} flexShrink={1} flexDirection="column" overflowY="hidden" justifyContent="flex-end">
-        {/* marginBottom={-clipBottom} slides the content DOWN past the flex-end
-            fold so overflow:hidden cuts the partly-scrolled boundary item's
-            trailing rows. This is what makes scrolling row-continuous instead of
-            snapping item-to-item. */}
-        <Box flexDirection="column" flexShrink={0} marginBottom={-clipBottom}>
-          {/* Banner only when the oldest content is in view — otherwise it would
-              wrongly pin to the top of every scrolled-into-the-middle window. */}
-          {startIdx === 0 && <Banner version={VERSION} firstRun={needsSetup} columns={columns} />}
-          {shownItems.map((it) => (
-            <TranscriptItem key={it._k} item={it} width={columns} />
-          ))}
-          {/* live streaming assistant rides at the bottom of the transcript */}
-          {atBottom && stream && <StreamingMessage text={stream.text} thinking={stream.thinking && !stream.text} startedAt={stream.startedAt} />}
-        </Box>
+      {/* goncho: chat | shell. Two Panes in a row container clip independently
+          (verified), so each scrolls without disturbing the other. Below MIN_DUAL
+          only the focused pane renders, full width. */}
+      <Box flexGrow={1} flexShrink={1} flexDirection="row">
+        {(dual || focus === 'chat') && (
+          <Pane
+            width={dual ? leftWidth : undefined}
+            focused={focus === 'chat'}
+            bordered={dual}
+            borderColor={theme.faint}
+            focusColor={theme.accent}
+            clipBottom={clipBottom}
+            header={startIdx === 0 ? <Banner version={VERSION} firstRun={needsSetup} columns={chatWidth} /> : null}
+          >
+            {shownItems.map((it) => (
+              <TranscriptItem key={it._k} item={it} width={chatWidth} />
+            ))}
+            {/* live streaming assistant rides at the bottom of the transcript */}
+            {atBottom && stream && <StreamingMessage text={stream.text} thinking={stream.thinking && !stream.text} startedAt={stream.startedAt} />}
+          </Pane>
+        )}
+        {(dual || focus === 'shell') && (
+          <Pane
+            width={dual ? rightWidth : undefined}
+            focused={focus === 'shell'}
+            bordered={dual}
+            borderColor={theme.faint}
+            focusColor={theme.accent}
+            clipBottom={shellScroll.clipBottom}
+            footer={
+              <Box>
+                <Text color={focus === 'shell' ? theme.accent : theme.faint}>{glyphs.prompt} </Text>
+                {focus === 'shell' && !busy ? (
+                  <PromptInput
+                    value={shellInput}
+                    onChange={setShellInput}
+                    onSubmit={submitShell}
+                    disabled={false}
+                    history={shellHistory}
+                    histIdx={shellHistIdx}
+                    setInput={setShellInput}
+                    onEscape={handleEscape}
+                  />
+                ) : (
+                  <Text color={theme.faint}>{shellInput || (busy ? 'running… esc to stop' : 'tab to focus')}</Text>
+                )}
+              </Box>
+            }
+          >
+            {shellScroll.shownItems.map((it) => (
+              <TranscriptItem key={it._k} item={it} width={shellWidth} />
+            ))}
+          </Pane>
+        )}
       </Box>
 
       {/* Bottom chrome (indicators, overlays, input, footer). flexShrink={0} so
@@ -958,19 +1080,26 @@ export default function App({ engine, config, provider, needsSetup }) {
               <>
                 <Box flexShrink={0}><Text color={pending ? theme.faint : theme.brand} bold>{glyphs.prompt} </Text></Box>
                 <Box flexGrow={1}>
-                  <PromptInput
-                    value={input}
-                    onChange={setInput}
-                    onSubmit={submit}
-                    disabled={!!pending}
-                    history={inputHistory}
-                    histIdx={histIdx}
-                    setInput={setInput}
-                    onEscape={handleEscape}
-                    cmdMatches={cmdMatches}
-                    cmdSel={cmdSel}
-                    setCmdSel={setCmdSel}
-                  />
+                  {/* goncho: the chat prompt is UNMOUNTED when the shell pane has
+                      focus — not merely hidden. Ink's useInput is global, so two
+                      mounted TextInputs would both consume every keystroke. */}
+                  {focus === 'chat' ? (
+                    <PromptInput
+                      value={input}
+                      onChange={setInput}
+                      onSubmit={submit}
+                      disabled={!!pending}
+                      history={inputHistory}
+                      histIdx={histIdx}
+                      setInput={setInput}
+                      onEscape={handleEscape}
+                      cmdMatches={cmdMatches}
+                      cmdSel={cmdSel}
+                      setCmdSel={setCmdSel}
+                    />
+                  ) : (
+                    <Text color={theme.faint}>{input || 'tab to focus'}</Text>
+                  )}
                 </Box>
               </>
             )}

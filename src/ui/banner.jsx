@@ -50,7 +50,7 @@ function BigBanner({ version }) {
       <Box marginTop={1}>
         <Text color={theme.text}>🏴‍☠️  Local AI first copilot for your console  🇦🇷</Text>
       </Box>
-      <Text color={theme.faint}>/help for commands · tab = auto-approve · esc = interrupt</Text>
+      <Text color={theme.faint}>/help · tab = switch pane · shift+tab = auto-approve · esc = interrupt</Text>
     </Box>
   );
 }
@@ -64,7 +64,7 @@ function CompactBanner({ version }) {
         {version ? <Text color={theme.faint}>  v{version}</Text> : null}
       </Text>
       <Text color={theme.text}>🏴‍☠️  Local AI first copilot for your console  🇦🇷</Text>
-      <Text color={theme.faint}>  /help for commands · tab = auto-approve · esc = interrupt</Text>
+      <Text color={theme.faint}>  /help · tab = switch pane · shift+tab = auto-approve · esc = interrupt</Text>
     </Box>
   );
 }
