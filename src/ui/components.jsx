@@ -48,10 +48,15 @@ export function Message({ who, text, reasoning, thoughtMs, width }) {
       <Box paddingLeft={2}>
         {/* The user types plain text; the model emits Markdown (tables, bold,
             code, lists) — render its replies through the Markdown component so
-            they don't show as raw pipes/asterisks. */}
-        {who === 'you'
-          ? <Text color={color} wrap="wrap">{text}</Text>
-          : <Markdown text={text} width={(width || 80) - 2} />}
+            they don't show as raw pipes/asterisks.
+            Width is the pane's content width MINUS this paddingLeft(2); otherwise
+            text wraps to the full width and spills 2 cols past the right border.
+            Wrap the whole column too so `wrap` has a hard box to break against. */}
+        <Box width={Math.max(10, (width || 80) - 2)}>
+          {who === 'you'
+            ? <Text color={color} wrap="wrap">{text}</Text>
+            : <Markdown text={text} width={(width || 80) - 2} />}
+        </Box>
       </Box>
     </Box>
   );

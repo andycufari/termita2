@@ -919,6 +919,11 @@ export default function App({ engine, config, provider, needsSetup }) {
   // pane absorbs the space, so the layout stays still.
   const liveIndicators = (
     <>
+      {/* Approval menu lives HERE, in the chat pane's footer — not in the bottom
+          chrome — so it doesn't push both panes up. It stays next to the proposed
+          command (the tool card just above it in the same pane), which is exactly
+          what you're deciding on, so a full-screen modal would be wrong here. */}
+      {pending && <ApprovalMenu selected={selected} danger={!!pending.danger} />}
       {runningTool && (
         <RunningIndicator tool={runningTool} lastOutputAt={lastOutputAt} width={chatWidth} />
       )}
@@ -1069,8 +1074,8 @@ export default function App({ engine, config, provider, needsSetup }) {
         </Box>
       )}
 
-      {/* approval bar for the pending tool */}
-      {pending && <ApprovalMenu selected={selected} danger={!!pending.danger} />}
+      {/* approval menu moved into the chat pane's footer (see liveIndicators) so
+          it sits with the proposed command and doesn't push the panes up. */}
 
       {/* Menus render as centered dialogs in the modal region ABOVE — not here —
           so opening one no longer shoves the panes up the screen. */}
@@ -1381,8 +1386,10 @@ const TranscriptItem = React.memo(function TranscriptItem({ item, width }) {
       // just the proposal card; output streams below as separate 'output' items
       return <ToolCard name={item.name} args={item.args} danger={item.danger} status={item.status} />;
     case 'output':
-      // one line of shell output — dim, indented, prints into scrollback live
-      return <Text color={theme.dim} wrap="wrap">  │ {item.text || ' '}</Text>;
+      // one line of shell output. Readable text (not theme.dim) — dim made a
+      // whole pane of command output look greyed-out/disabled. The leading gutter
+      // bar stays faint so the output still reads as secondary to messages.
+      return <Text color={theme.text} wrap="wrap"><Text color={theme.faint}>  │ </Text>{item.text || ' '}</Text>;
     case 'tooldone': {
       const color = item.interrupted ? theme.warn : (item.exitCode === 0 || item.exitCode == null) ? theme.okDim : theme.danger;
       const label = item.interrupted ? '⊘ interrupted' : (item.exitCode === 0 || item.exitCode == null) ? '✓ done' : `✗ exit ${item.exitCode}`;
