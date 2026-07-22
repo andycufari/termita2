@@ -34,6 +34,7 @@ export class Engine {
     this.busy = false;
     this.abort = null; // current AbortController
     this._bangSeq = 0; // ids for user-run `!cmd` (distinct from model tool ids)
+    this.onPersist = null; // set by cli.js to snapshot history for `termita -c`
 
     // pending approval: { resolve, toolCall }
     this._pendingDecision = null;
@@ -85,6 +86,19 @@ export class Engine {
 
   clearHistory() {
     this.history = [];
+    this._persist();
+  }
+
+  // Load a prior conversation (for `termita -c`). Replaces history wholesale.
+  restoreHistory(history) {
+    if (Array.isArray(history) && history.length) this.history = history;
+  }
+
+  // Snapshot history so `termita -c` can resume. cli.js wires onPersist to write
+  // ~/.config/termita/last-session.json. Best-effort and cheap; called whenever
+  // history changes so a hard kill still leaves a recent snapshot.
+  _persist() {
+    try { this.onPersist?.(this.history); } catch { /* best-effort */ }
   }
 
   // Re-run the last user turn. For the common "model returned an empty reply"
@@ -235,6 +249,7 @@ export class Engine {
       this.busy = false;
       this.abort = null;
       this.events.emit(EVENTS.TURN_DONE, {});
+      this._persist();
     }
   }
 
@@ -262,6 +277,7 @@ export class Engine {
       this.busy = false;
       this.abort = null;
       this.events.emit(EVENTS.TURN_DONE, {});
+      this._persist();
     }
   }
 
@@ -289,6 +305,7 @@ export class Engine {
       this.busy = false;
       this.abort = null;
       this.events.emit(EVENTS.TURN_DONE, {});
+      this._persist();
     }
   }
 

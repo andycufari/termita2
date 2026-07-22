@@ -101,12 +101,27 @@ function appendItems(cur, added) {
   return [{ _k: uid(), kind: 'trim', count: prior + dropped }, ...kept];
 }
 
-export default function App({ engine, config, provider, needsSetup }) {
+export default function App({ engine, config, provider, needsSetup, restored }) {
   const { exit, suspendTerminal } = useApp();
   const { stdout } = useStdout();
 
   const [setupOpen, setSetupOpen] = useState(!!needsSetup);
-  const [items, setItems] = useState([]); // transcript items
+  // On `termita -c` the engine's history is pre-loaded; rebuild the visible
+  // transcript from it (user/assistant messages only — tool calls and their
+  // output aren't replayed, the summary of what happened is in the messages).
+  const [items, setItems] = useState(() => {
+    if (!restored || !engine.history?.length) return [];
+    const out = [];
+    for (const m of engine.history) {
+      if (m.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
+        out.push({ _k: uid(), kind: 'msg', who: 'you', text: m.content });
+      } else if (m.role === 'assistant' && typeof m.content === 'string' && m.content.trim()) {
+        out.push({ _k: uid(), kind: 'msg', who: 'term', text: m.content });
+      }
+    }
+    if (out.length) out.push({ _k: uid(), kind: 'notice', text: `↩ resumed last session (${out.length} messages)`, level: 'dim' });
+    return out;
+  });
   const [input, setInput] = useState('');
   const [stream, setStream] = useState(null); // { text, thinking }
   const [pending, setPending] = useState(null); // active approval { id, name, args, gate }

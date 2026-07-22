@@ -4,6 +4,7 @@ import process from 'node:process';
 import pkg from '../package.json' with { type: 'json' };
 import { loadConfig, saveConfig, configExists, CONFIG_PATH, SYSTEM_PATH } from './config/config.js';
 import { probeSystem, saveSystem, getSystem } from './config/system.js';
+import { saveSession, loadSession } from './config/session.js';
 
 export const VERSION = pkg.version;
 
@@ -77,13 +78,14 @@ function help() {
 
   ${c.bold('usage')}
     termita            ${c.dim('open the chat TUI')}
+    termita -c         ${c.dim('continue the last session')}
     termita init       ${c.dim('probe system + write config')}
     termita doctor     ${c.dim('check endpoint, model, node')}
     termita --help     ${c.dim('this')}
 `);
 }
 
-async function bootstrapTUI() {
+async function bootstrapTUI({ resume = false } = {}) {
   // auto-init on first run
   // First run = no config file yet. We DON'T silently write defaults anymore;
   // the in-TUI setup wizard handles configuration. Just probe the system.
@@ -108,6 +110,16 @@ async function bootstrapTUI() {
   const systemPrompt = buildSystemPrompt(system);
   const engine = new Engine({ provider, gate, system, systemPrompt });
 
+  // `termita -c` / --continue: restore the last conversation so the model picks
+  // up with full context. Snapshot after every turn (and on exit) so there's
+  // always a recent one to resume. `restored` tells the UI to show a banner note.
+  engine.onPersist = (history) => saveSession({ history, model: config.llm.model, cwd: getSystem()?.cwd });
+  let restored = false;
+  if (resume) {
+    const prev = loadSession();
+    if (prev?.history?.length) { engine.restoreHistory(prev.history); restored = prev.history.length; }
+  }
+
   // alternateScreen: render into a dedicated screen buffer (like vim/less) so
   // the whole UI is repainted each frame. This is the only way to fully kill
   // terminal-resize ghosting — Ink's inline renderer erases the prior frame by
@@ -115,14 +127,17 @@ async function bootstrapTUI() {
   // half-fixed in v7). The cost is no NATIVE scrollback, so the transcript is a
   // height-windowed, in-app-scrollable region instead (see app.jsx).
   const { waitUntilExit } = render(
-    React.createElement(App, { engine, config, provider, needsSetup }),
+    React.createElement(App, { engine, config, provider, needsSetup, restored }),
     { exitOnCtrlC: false, alternateScreen: true },
   );
 
   // Clean up per-command output files on exit — whether the UI unmounts normally
   // or the process is signalled. Best-effort; the 7-day pruner (log.js) is the
   // backstop if we're killed hard (SIGKILL) and never run this.
-  const cleanup = () => { try { engine.dispose(); } catch { /* best-effort */ } };
+  const cleanup = () => {
+    try { saveSession({ history: engine.history, model: config.llm.model, cwd: getSystem()?.cwd }); } catch { /* best-effort */ }
+    try { engine.dispose(); } catch { /* best-effort */ }
+  };
   process.once('SIGINT', () => { cleanup(); process.exit(0); });
   process.once('SIGTERM', () => { cleanup(); process.exit(0); });
 
@@ -139,7 +154,8 @@ async function bootstrapTUI() {
     else if (sub === 'doctor') await cmdDoctor();
     else if (sub === '--help' || sub === '-h' || sub === 'help') help();
     else if (sub === '--version' || sub === '-v') console.log(`termita ${VERSION}`);
-    else await bootstrapTUI();
+    // -c / --continue / continue: resume the last session
+    else await bootstrapTUI({ resume: argv.includes('-c') || argv.includes('--continue') || sub === 'continue' });
   } catch (err) {
     console.error(c.red(`\ntermita: ${err.stack || err.message}\n`));
     process.exit(1);
