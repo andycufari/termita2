@@ -573,8 +573,8 @@ export default function App({ engine, config, provider, needsSetup }) {
       config.ui.mouseCapture = next;
       saveConfig(config);
       push({ kind: 'notice', text: next
-        ? 'mouse capture ON — wheel scrolls, drag still selects text'
-        : 'mouse capture OFF — no wheel scrolling; use PgUp/PgDn/Home/End',
+        ? 'mouse capture ON — wheel scrolls; hold Option/Shift to select text'
+        : 'mouse capture OFF — drag selects/copies; scroll with PgUp/PgDn/Home/End',
         level: 'ok' });
       return next;
     });

@@ -22,11 +22,11 @@ export const DEFAULT_CONFIG = {
     contextSize: 8192, // model context window, for the token gauge in the footer
     reasoning: false,
   },
-  // mouseCapture ON: we use mode 1000 (not 1002), so the wheel scrolls the
-  // transcript WITHOUT taking drag-to-select away from the terminal. Alt-screen
-  // has no native scrollback, so capture off means no scrolling at all — only
-  // turn it off (/mouse) if a terminal mishandles 1000. See use-mouse-wheel.js.
-  ui: { theme: 'neon', mouseCapture: true },
+  // mouseCapture OFF by default: capturing the mouse for wheel-scroll (even mode
+  // 1000) makes many terminals withhold drag-to-select, and losing copy/paste
+  // hurts more than losing wheel-scroll — PgUp/PgDn/Home/End still scroll. Turn
+  // the wheel on with /mouse when you want it. See use-mouse-wheel.js.
+  ui: { theme: 'neon', mouseCapture: false },
   policy: { allowlist: [], autoRunReadOnly: true, autoApprove: false },
   // Web search (Brave). Empty key → the websearch tool stays hidden from the
   // model. Set via `/websearch <key>` or the BRAVE_API_KEY env var.
