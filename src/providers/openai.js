@@ -147,9 +147,14 @@ export class OpenAIProvider {
     let reasoning = '';
     const toolAcc = new Map(); // index -> { id, name, args }
 
+    let finishReason = null;
     await parseSSE(res.body, (json) => {
       const choice = json.choices?.[0];
       if (!choice) return;
+      // 'length' here = the model hit max_tokens mid-generation. For a thinking
+      // model that can mean the reasoning trace ate the whole budget before any
+      // visible text — the engine uses this to give an actionable message.
+      if (choice.finish_reason) finishReason = choice.finish_reason;
       const delta = choice.delta || {};
 
       if (delta.content) {
@@ -187,7 +192,14 @@ export class OpenAIProvider {
       }
     }
 
-    return { text: fullText, reasoning, toolCalls };
+    // truncated = nothing to show, and it looks like the token budget was the
+    // cause. The clean signal is finish_reason==='length', but many local servers
+    // (LM Studio with some thinking models) DON'T send finish_reason at all —
+    // there we fall back to "empty output + a reasoning trace was produced", which
+    // is the thinking-ate-the-budget shape. Both point at maxTokens/reasoning.
+    const nothingShown = !fullText.trim() && toolCalls.length === 0;
+    const truncated = nothingShown && (finishReason === 'length' || (finishReason == null && reasoning.length > 0));
+    return { text: fullText, reasoning, toolCalls, finishReason, truncated, reasoningLen: reasoning.length };
   }
 }
 

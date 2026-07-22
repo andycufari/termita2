@@ -14,6 +14,7 @@ export const COMMANDS = [
   { name: 'memory',    usage: '/memory [add|forget|clear]', desc: 'show / manage what termita remembers', aliases: ['mem'] },
   { name: 'cognito',   usage: '/cognito [on|off]',   desc: 'incognito: no memory saved or recalled', aliases: ['incognito'] },
   { name: 'auto',      usage: '/auto',              desc: 'toggle auto-approve (or TAB)', aliases: [] },
+  { name: 'retry',     usage: '/retry',             desc: 're-run the last turn (e.g. after an empty reply)', aliases: ['r'] },
   { name: 'clear',     usage: '/clear',             desc: 'wipe transcript + history', aliases: ['clean'] },
   { name: 'compact',   usage: '/compact',           desc: 'summarize history, free context', aliases: [] },
   { name: 'websearch', usage: '/websearch [key]',    desc: 'set/show Brave web-search key', aliases: ['brave', 'search'] },

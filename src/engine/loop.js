@@ -87,6 +87,27 @@ export class Engine {
     this.history = [];
   }
 
+  // Re-run the last user turn. For the common "model returned an empty reply"
+  // case: drop a trailing empty assistant message (and re-send the same user
+  // content) so a flaky local model gets another shot without you retyping.
+  // Returns false if there's nothing to retry.
+  async retry() {
+    if (this.busy) return false;
+    // strip a trailing empty/whitespace assistant reply — that's the dud
+    while (this.history.length && this.history.at(-1).role === 'assistant'
+           && !String(this.history.at(-1).content || '').trim()) {
+      this.history.pop();
+    }
+    const lastUser = [...this.history].reverse().find((m) => m.role === 'user');
+    if (!lastUser) return false;
+    // pop everything from the last user turn onward, then re-send it
+    const idx = this.history.lastIndexOf(lastUser);
+    const content = lastUser.content;
+    this.history = this.history.slice(0, idx);
+    await this.send(content);
+    return true;
+  }
+
   // Release session resources (per-command output files). Best-effort; safe to
   // call more than once. Invoked on app exit — see cli.js.
   dispose() {
@@ -98,6 +119,33 @@ export class Engine {
     this.history = [
       { role: 'assistant', content: `[conversation summary so far]\n${summaryText}` },
     ];
+  }
+
+  // Ask the model to summarize the conversation so far, then collapse history to
+  // that summary — frees context on a long session without wiping it. Returns
+  // { ok, before, after } token-ish sizes, or { ok:false } if there's nothing to
+  // compact or a turn is running.
+  async compact() {
+    if (this.busy || this.history.length < 2) return { ok: false };
+    const before = this.history.length;
+    const transcript = this.history
+      .map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : '[content]'}`)
+      .join('\n');
+    let summary = '';
+    try {
+      const resp = await this.provider.streamComplete({
+        system: 'Summarize this terminal-assistant conversation compactly: the task, key facts learned, commands run and their results, and any open threads. Be terse; this replaces the history.',
+        messages: [{ role: 'user', content: transcript }],
+        onToken: () => {},
+        onReasoning: () => {},
+      });
+      summary = (resp.text || '').trim();
+    } catch {
+      return { ok: false };
+    }
+    if (!summary) return { ok: false };
+    this.setSummary(summary);
+    return { ok: true, before, after: this.history.length };
   }
 
   async _awaitDecision(toolCall) {
@@ -281,16 +329,28 @@ export class Engine {
         this.history.push({ role: 'assistant', content: resp.text || '' });
         this.log.assistant(text);
         this.events.emit(EVENTS.ASSISTANT_DONE, { text: resp.text || '', reasoning: resp.reasoning, ms });
-        // Empty reply (common with thinking models when the trace eats the token
-        // budget) — tell the user instead of silently leaving a blank.
+        // Empty reply — tell the user instead of leaving a blank, and point at the
+        // ACTUAL cause. `truncated` (finish_reason=length, no text) means the model
+        // hit max_tokens; if the reasoning trace is where the budget went, the fix
+        // is maxTokens or /reasoning off, NOT the context window (a common
+        // confusion — the ctx gauge can read 4% while this fires).
         if (!text) {
-          const thinking = !!this.provider?.llm?.reasoning;
-          this.events.emit(EVENTS.NOTICE, {
-            text: thinking
-              ? 'model returned an empty reply (thinking trace may have used the token budget — try /reasoning off or raise maxTokens)'
-              : 'model returned an empty reply — try again, or raise maxTokens',
-            level: 'warn',
-          });
+          const max = this.provider?.llm?.maxTokens ?? 4096;
+          let msg;
+          if (resp.truncated && resp.reasoningLen > 0) {
+            // Ran out of OUTPUT budget mid-thinking. Only claim this when the
+            // reasoning trace is actually large relative to the budget — a short
+            // trace + empty text is the intermittent case below, not truncation.
+            msg = `model spent its ${max}-token output budget thinking before it replied — /maxtokens ${max * 2} or /reasoning off. (This is the output budget, not the context window.)`;
+          } else if (resp.truncated) {
+            msg = `model hit the ${max}-token output limit with nothing to show — /maxtokens ${max * 2}.`;
+          } else {
+            // Not a token issue — the model just returned nothing. Common with
+            // abliterated/thinking local models; retrying usually works. Don't
+            // send people to raise maxTokens when that isn't the cause.
+            msg = 'model returned an empty reply (some local models do this intermittently) — just send again, or /retry.';
+          }
+          this.events.emit(EVENTS.NOTICE, { text: msg, level: 'warn' });
         }
         return;
       }

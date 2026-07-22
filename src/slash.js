@@ -47,6 +47,22 @@ export async function runSlash(line, ctx) {
       push({ kind: 'notice', text: 'transcript + history wiped — fresh context', level: 'ok' });
       return;
 
+    case 'retry':
+    case 'r': {
+      const ok = await engine.retry();
+      if (!ok) push({ kind: 'notice', text: 'nothing to retry', level: 'warn' });
+      return;
+    }
+
+    case 'compact': {
+      push({ kind: 'notice', text: 'summarizing conversation…', level: 'dim' });
+      const res = await engine.compact();
+      push(res.ok
+        ? { kind: 'notice', text: `compacted ${res.before} messages → 1 summary; context freed`, level: 'ok' }
+        : { kind: 'notice', text: 'nothing to compact (or the model returned no summary)', level: 'warn' });
+      return;
+    }
+
     case 'auto':
       ctx.toggleAuto();
       return;
