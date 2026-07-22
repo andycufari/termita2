@@ -31,7 +31,20 @@ export function isInteractive(command) {
   const cmd = String(command || '').trim();
   if (!cmd) return false;
   if (NON_TTY_HINT.test(cmd)) return false;
-  const base = cmd.split(/\s+/)[0].replace(/.*\//, '');
+  let base = cmd.split(/\s+/)[0].replace(/.*\//, '');
+  // `sudo`/`doas` need the REAL terminal to prompt for a password — run in-app
+  // with stdin ignored and they die with "a terminal is required to read the
+  // password". Route to the TTY path so the prompt works. (Unless -n/--non-
+  // interactive is passed, which tells sudo to fail rather than prompt.)
+  if ((base === 'sudo' || base === 'doas') && !/\s-\w*n\b|\s--non-interactive\b/.test(cmd)) {
+    return true;
+  }
+  // Look PAST a privilege wrapper so `sudo vim`, `sudo htop` still count as the
+  // full-screen program they wrap, not as "sudo".
+  if (base === 'sudo' || base === 'doas') {
+    const rest = cmd.split(/\s+/).slice(1).filter((t) => !t.startsWith('-'));
+    if (rest[0]) base = rest[0].replace(/.*\//, '');
+  }
   // `tail -f` is a live stream (TTY-ish); a plain `tail file` runs in-app.
   if (base === 'tail') return /\s-\w*f/.test(cmd) || /\s--follow\b/.test(cmd);
   // bare REPL is interactive; `python x.py` / `node build.js` is not.

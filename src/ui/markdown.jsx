@@ -208,7 +208,7 @@ function Block({ block, width }) {
   switch (block.type) {
     case 'heading': {
       const color = theme[HEADING_COLOR[block.level] || 'brand'] || theme.brand;
-      return <Text bold color={color}>{block.level <= 2 ? '' : '· '}{renderInline(block.text, 'h')}</Text>;
+      return <Text bold color={color} wrap="wrap">{block.level <= 2 ? '' : '· '}{renderInline(block.text, 'h')}</Text>;
     }
     case 'code':
       return (
@@ -224,14 +224,14 @@ function Block({ block, width }) {
     case 'quote':
       return (
         <Box flexDirection="column" paddingLeft={1} borderStyle="single" borderColor={theme.brandDim} borderTop={false} borderRight={false} borderBottom={false}>
-          {block.lines.map((l, i) => <Text key={i} color={theme.dim} italic>{renderInline(l, `q${i}`)}</Text>)}
+          {block.lines.map((l, i) => <Text key={i} color={theme.dim} italic wrap="wrap">{renderInline(l, `q${i}`)}</Text>)}
         </Box>
       );
     case 'list':
       return (
         <Box flexDirection="column">
           {block.items.map((it, i) => (
-            <Text key={i} color={theme.text}>
+            <Text key={i} color={theme.text} wrap="wrap">
               <Text color={theme.brand}>{it.ordered ? `${it.num}.` : '•'} </Text>
               {renderInline(it.text, `l${i}`)}
             </Text>
