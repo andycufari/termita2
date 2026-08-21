@@ -217,35 +217,7 @@ export async function runSlash(line, ctx) {
       push({ kind: 'msg', who: 'term', text: '🏴‍☠️ termita 🇦🇷\n@andycufari · 2026\nEnjoy the ride 🏴‍☠️ 🇦🇷' });
       return;
 
-    case 'compact':
-      await compact(ctx);
-      return;
-
     default:
       push({ kind: 'notice', text: `unknown command: /${cmd} — try /help`, level: 'warn' });
-  }
-}
-
-// Ask the model to summarize history, then replace it with the summary.
-async function compact(ctx) {
-  const { engine, provider, push } = ctx;
-  if (engine.history.length < 2) { push({ kind: 'notice', text: 'nothing to compact', level: 'dim' }); return; }
-  push({ kind: 'notice', text: 'compacting…', level: 'dim' });
-  try {
-    const summaryReq = [
-      ...engine.history,
-      { role: 'user', content: 'Summarize our conversation so far into a tight note I can use as memory: key facts, decisions, current state, and anything in-flight. Bullet points, no fluff.' },
-    ];
-    let summary = '';
-    await provider.streamComplete({
-      system: 'You compress conversations into compact, factual notes.',
-      messages: summaryReq,
-      tools: [],
-      onToken: (t) => { summary += t; },
-    });
-    engine.setSummary(summary.trim() || '(empty)');
-    push({ kind: 'notice', text: `compacted — history is now a ${summary.length}-char note`, level: 'ok' });
-  } catch (err) {
-    push({ kind: 'error', message: `compact failed: ${err.message}` });
   }
 }
