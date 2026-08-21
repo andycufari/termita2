@@ -37,8 +37,17 @@ const TERMITA_ART = [
 
 // Big ASCII-art splash — first run (or a wide enough terminal). Includes the
 // version so it's obvious which build is running. Pirate flag flanks the
+// The Tab hint depends on the layout: in dual it switches panes (auto-approve
+// moves to Shift+Tab), in classic it IS auto-approve. One helper so the big and
+// compact banners can't drift apart.
+function hintLine(dual) {
+  return dual
+    ? '/help · tab = switch pane · shift+tab = auto-approve · esc = interrupt'
+    : '/help · tab = auto-approve · /dual = split panes · esc = interrupt';
+}
+
 // wordmark, Argentina flag on the right — this is a statement, not a product.
-function BigBanner({ version }) {
+function BigBanner({ version, dual }) {
   return (
     <Box flexDirection="column" marginBottom={1} paddingX={1}>
       {TERMITA_ART.map((row, i) => (
@@ -50,13 +59,13 @@ function BigBanner({ version }) {
       <Box marginTop={1}>
         <Text color={theme.text}>🏴‍☠️  Local AI first copilot for your console  🇦🇷</Text>
       </Box>
-      <Text color={theme.faint}>/help · tab = switch pane · shift+tab = auto-approve · esc = interrupt</Text>
+      <Text color={theme.faint}>{hintLine(dual)}</Text>
     </Box>
   );
 }
 
 // Compact neon wordmark for subsequent renders / narrow terminals.
-function CompactBanner({ version }) {
+function CompactBanner({ version, dual }) {
   return (
     <Box flexDirection="column" marginBottom={1} paddingX={1}>
       <Text>
@@ -64,7 +73,7 @@ function CompactBanner({ version }) {
         {version ? <Text color={theme.faint}>  v{version}</Text> : null}
       </Text>
       <Text color={theme.text}>🏴‍☠️  Local AI first copilot for your console  🇦🇷</Text>
-      <Text color={theme.faint}>  /help · tab = switch pane · shift+tab = auto-approve · esc = interrupt</Text>
+      <Text color={theme.faint}>{`  ${hintLine(dual)}`}</Text>
     </Box>
   );
 }
@@ -73,17 +82,18 @@ function CompactBanner({ version }) {
 // art is the identity, so it renders every launch, not just the first. Only
 // fall back to the one-line wordmark on terminals too narrow for the art (it
 // would wrap and look broken). `firstRun` is accepted for API stability.
-export function Banner({ version, firstRun = false, columns = 80 }) { // eslint-disable-line no-unused-vars
+export function Banner({ version, firstRun = false, columns = 80, dual = true }) { // eslint-disable-line no-unused-vars
   const wideEnough = columns >= 58; // art is ~56 cols; leave a little margin
-  if (wideEnough) return <BigBanner version={version} />;
-  return <CompactBanner version={version} />;
+  if (wideEnough) return <BigBanner version={version} dual={dual} />;
+  return <CompactBanner version={version} dual={dual} />;
 }
 
 export function HelpPanel() {
   // Derived from the shared command registry so help never drifts from reality.
   const rows = COMMANDS.map((c) => [c.usage, c.desc]);
   const keys = [
-    ['TAB', 'toggle auto-approve'],
+    ['TAB', 'switch pane (dual) / toggle auto-approve (classic)'],
+    ['Shift+TAB', 'toggle auto-approve (dual layout)'],
     ['R / E / A / N', 'run / edit / always / no'],
     ['Esc', 'interrupt streaming or a prompt'],
     ['!command', 'run it yourself in the terminal (e.g. !ls, !vim x)'],

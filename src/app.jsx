@@ -156,11 +156,21 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
 
   const { columns, rows } = useTerminalSize(); // reactive terminal size (responsive)
 
-  // goncho layout. Two Norton-style panes need real width; below MIN_DUAL we fall
-  // back to ONE full-width pane and Tab switches which pane is VISIBLE rather than
-  // which is focused. (Distinct from `narrow` further down, which only compacts
-  // the footer at <72 — different threshold, different purpose.)
-  const dual = columns >= MIN_DUAL;
+  // goncho layout. Two Norton-style panes need real width; without dual we fall
+  // back to the CLASSIC single transcript: one full-width pane, chat and command
+  // output interleaved chronologically, and Tab returns to auto-approve.
+  // (Distinct from `narrow` further down, which only compacts the footer at <72
+  // — different threshold, different purpose.)
+  // Two gates: the user's preference (/dual, persisted) AND enough width. The
+  // width check still wins — two panes genuinely don't fit under MIN_DUAL, so a
+  // saved `true` can't force an unreadable layout on a narrow terminal.
+  const [dualPref, setDualPref] = useState(config.ui?.dualPane !== false);
+  const dual = dualPref && columns >= MIN_DUAL;
+  // Leaving dual (via /dual off OR shrinking the terminal) with focus on the
+  // shell would strand the input in shell mode — `$` prompt, no visible pane,
+  // and Tab no longer switches back. Snap focus to chat whenever dual drops.
+  useEffect(() => { if (!dual) setFocus('chat'); }, [dual]);
+
   // Are we typing into the shell? Drives the prompt marker, the input border and
   // the pane highlight — one flag so they can never disagree.
   const shellFocus = focus === 'shell';
@@ -486,6 +496,7 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
         setMaxTokens: (n) => doSetMaxTokens(n),
         setContextSize: (n) => doSetContextSize(n),
         toggleMouse: (v) => doToggleMouse(v),
+        toggleDual: (v) => doToggleDual(v),
         toggleCognito: (v) => doToggleCognito(v),
         memoryChanged: () => engine.rebuildSystemPrompt(),
         showHelp: () => push({ kind: 'help' }),
@@ -594,6 +605,27 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
       return next;
     });
   }, [config, push]);
+
+  // Toggle the dual-pane layout and persist it, mirroring doToggleMouse. The
+  // notice reports what you'll ACTUALLY get: saving `true` on a narrow terminal
+  // still renders classic, and silently claiming otherwise would be a lie.
+  const doToggleDual = useCallback((force) => {
+    setDualPref((cur) => {
+      const next = typeof force === 'boolean' ? force : !cur;
+      if (!config.ui) config.ui = {};
+      config.ui.dualPane = next;
+      saveConfig(config);
+      if (next && columns < MIN_DUAL) {
+        push({ kind: 'notice', text: `dual-pane ON — but this terminal is ${columns} cols; needs ${MIN_DUAL}, so staying classic for now`, level: 'warn' });
+      } else {
+        push({ kind: 'notice', text: next
+          ? 'dual-pane ON — chat | shell, Tab switches (Shift+Tab auto-approve)'
+          : 'dual-pane OFF — classic single transcript, Tab is auto-approve',
+          level: 'ok' });
+      }
+      return next;
+    });
+  }, [config, push, columns]);
 
   // Toggle incognito (memory blackout, session-only). Flips the memory module's
   // session flag, mirrors it to React state (footer indicator), and rebuilds the
@@ -840,8 +872,9 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
       return;
     }
 
-    // goncho: Tab SWITCHES PANES; auto-approve moved to Shift+Tab. Both arrive as
-    // key.tab — Ink reports Shift+Tab (\x1b[Z) as {name:'tab', shift:true}, which
+    // goncho: in DUAL mode Tab switches panes and auto-approve moves to Shift+Tab;
+    // in classic mode there's no pane to switch, so Tab means auto-approve again.
+    // Both arrive as key.tab — Ink reports Shift+Tab (\x1b[Z) as {name:'tab', shift:true}, which
     // is verified reliable, so one branch separates them.
     // The `/` menu still owns a plain Tab (PromptInput completes the highlighted
     // command). We recompute the menu state inline from `input` rather than using
@@ -849,6 +882,9 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
     // AND complete at once.
     if (key.tab) {
       if (key.shift) { doToggleAuto(); return; }
+      // Classic mode has no second pane to switch to, so Tab keeps its ORIGINAL
+      // meaning there (auto-approve) rather than being a dead key.
+      if (!dual) { doToggleAuto(); return; }
       if (matchCommands(input).length === 0) setFocus((f) => (f === 'chat' ? 'shell' : 'chat'));
       return;
     }
@@ -1029,7 +1065,7 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
               />
             ) : null}
             footer={liveIndicators}
-            header={startIdx === 0 ? <Banner version={VERSION} firstRun={needsSetup} columns={chatWidth} /> : null}
+            header={startIdx === 0 ? <Banner version={VERSION} firstRun={needsSetup} columns={chatWidth} dual={dual} /> : null}
           >
             {shownItems.map((it) => (
               <TranscriptItem key={it._k} item={it} width={chatWidth} />
