@@ -1,5 +1,7 @@
 // Build the system prompt: static persona + live machine facts + user memory.
 import { activeNotes } from '../config/memory.js';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const PERSONA = `You are termita, a copilot in the user's console. You work alongside the user, not as a silent executor — a partner with hacker vibes. Chill, short, direct.
 
@@ -36,6 +38,21 @@ LANGUAGE: respond in English by default. Only switch languages if the user write
 to you in another language — then mirror theirs for that reply. A little dry humor
 is welcome.`;
 
+// Boot sequence: read the project's context file from the cwd.
+// Priority: TERMITA.md → CLAUDE.md → AGENTS.md. First one that exists wins.
+// This is a user-configured macro, not per-project logic — the file itself
+// decides what to read (STATE, INDEX, last log, etc.).
+function loadProjectContext(cwd) {
+  const candidates = ['TERMITA.md', 'CLAUDE.md', 'AGENTS.md'];
+  for (const name of candidates) {
+    try {
+      const p = path.join(cwd, name);
+      return { name, content: fs.readFileSync(p, 'utf8') };
+    } catch { /* not here, try next */ }
+  }
+  return null;
+}
+
 export function buildSystemPrompt(sys) {
   const tools = (sys.available || []).join(', ') || '(unknown)';
   const facts = [
@@ -57,5 +74,15 @@ export function buildSystemPrompt(sys) {
     }
   } catch { /* memory is optional; never block the prompt */ }
 
-  return `${PERSONA}\n\n${facts}${memory}`;
+  // Project context (boot sequence): the cwd's TERMITA.md / CLAUDE.md / AGENTS.md.
+  let project = '';
+  try {
+    const ctx = loadProjectContext(sys.cwd);
+    if (ctx) {
+      project = '\n\nPROJECT CONTEXT (from ' + ctx.name + ' in ' + sys.cwd + '):\n' +
+        ctx.content.trim();
+    }
+  } catch { /* project context is optional; never block the prompt */ }
+
+  return `${PERSONA}\n\n${facts}${memory}${project}`;
 }

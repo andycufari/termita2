@@ -217,6 +217,10 @@ export async function runSlash(line, ctx) {
       push({ kind: 'msg', who: 'term', text: '🏴‍☠️ termita 🇦🇷\n@andycufari · 2026\nEnjoy the ride 🏴‍☠️ 🇦🇷' });
       return;
 
+    case 'compact':
+      await compact(ctx);
+      return;
+
     default:
       push({ kind: 'notice', text: `unknown command: /${cmd} — try /help`, level: 'warn' });
   }
