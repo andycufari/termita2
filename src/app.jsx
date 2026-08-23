@@ -8,7 +8,7 @@ import { EVENTS } from './engine/events.js';
 import { theme, glyphs } from './ui/theme.js';
 import { Banner, HelpPanel } from './ui/banner.jsx';
 import {
-  Message, StreamingMessage, ToolCard, OutputStream, ApprovalMenu, APPROVAL_ACTIONS, Notice, ErrorBox, Spinner,
+  Message, StreamingMessage, ToolCard, OutputStream, ApprovalModal, APPROVAL_ACTIONS, Notice, ErrorBox, Spinner,
   CommandMenu, MascotTag,
 } from './ui/components.jsx';
 import { saveConfig } from './config/config.js';
@@ -961,7 +961,13 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
   // input. These used to live in the bottom chrome, so opening one shoved the
   // panes up the screen. Now they replace the pane region and the layout holds
   // still. Pane state lives in React above, so the panes return untouched.
-  const modalOpen = !!(shareMenu || rewind || picker || setupOpen);
+  // Two different things, deliberately separate:
+  //  · modalOpen  → the dialog REPLACES the pane region (approval included).
+  //  · menuOpen   → a self-contained menu that also hides the bottom chrome.
+  // Approval is NOT a menuOpen: the chrome below carries the auto/ctx/model
+  // footer and the input box, and `Edit` needs that input mounted to type into.
+  const menuOpen = !!(shareMenu || rewind || picker || setupOpen);
+  const modalOpen = !!(pending || menuOpen);
   const modalWidth = Math.min(72, Math.max(40, columns - 8));
 
   // Transient status that used to live in the bottom chrome. Rendered inside the
@@ -970,11 +976,10 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
   // pane absorbs the space, so the layout stays still.
   const liveIndicators = (
     <>
-      {/* Approval menu lives HERE, in the chat pane's footer — not in the bottom
-          chrome — so it doesn't push both panes up. It stays next to the proposed
-          command (the tool card just above it in the same pane), which is exactly
-          what you're deciding on, so a full-screen modal would be wrong here. */}
-      {pending && <ApprovalMenu selected={selected} danger={!!pending.danger} />}
+      {/* The approval menu USED to live here, in the pane footer. In dual mode a
+          ~50-col pane gives the footer no guaranteed height, so Flexbox squeezed
+          the options away — you were asked to approve something with nothing
+          visible to pick. It's a centered modal now (see modalRegion). */}
       {runningTool && (
         <RunningIndicator tool={runningTool} lastOutputAt={lastOutputAt} width={chatWidth} />
       )}
@@ -995,7 +1000,9 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
     </>
   );
 
-  const modalRegion = shareMenu ? (
+  const modalRegion = pending ? (
+    <ApprovalModal pending={pending} selected={selected} width={modalWidth} />
+  ) : shareMenu ? (
     <Modal
       width={modalWidth}
       title={`!${shareMenu.cmd.length > 40 ? shareMenu.cmd.slice(0, 39) + '…' : shareMenu.cmd} finished${
@@ -1062,6 +1069,11 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
                 width={chatWidth}
                 color={focus === 'chat' ? theme.brand : theme.dim}
                 dimColor={theme.faint}
+                /* auto-approve is a MODE — it changes what happens without asking
+                   you, so it belongs on screen permanently, not in a notice that
+                   scrolls away three seconds after you toggle it. */
+                badge={autoApprove ? `auto ${glyphs.bolt}` : null}
+                badgeColor={theme.warn}
               />
             ) : null}
             footer={liveIndicators}
@@ -1130,7 +1142,7 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
 
       {/* Menus render as centered dialogs in the modal region ABOVE — not here —
           so opening one no longer shoves the panes up the screen. */}
-      {modalOpen ? null : (
+      {menuOpen ? null : (
         <>
           {/* Live indicators (thinking spinner, running command, queued messages)
               render INSIDE the chat pane's footer, not here — see `liveIndicators`.
@@ -1215,6 +1227,20 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
                   : toolRunning ? 'running… esc to stop'
                   : 'esc to interrupt'}
               </Text>
+            </Box>
+          )}
+
+          {/* Idle hint. In dual mode Tab switches panes, so auto-approve moves to
+              Shift+Tab — a remapping that was only ever announced in a notice
+              that scrolls away. The binding is shown here, in the mode it
+              applies to, so it can be discovered rather than remembered. */}
+          {!showCmdMenu && !pending && !toolRunning && !busy && !editing && (
+            <Box paddingLeft={1}>
+              <Text color={theme.faint}>
+                {dual ? 'tab = switch pane · shift+tab = auto-approve' : 'tab = auto-approve'}
+                {autoApprove ? ' · ' : ''}
+              </Text>
+              {autoApprove && <Text color={theme.warn}>auto is ON — commands run without asking</Text>}
             </Box>
           )}
 

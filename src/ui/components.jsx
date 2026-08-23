@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { Box, Text } from 'ink';
 import { theme, box, glyphs } from './theme.js';
 import { Markdown } from './markdown.jsx';
+import { Modal, ModalItem } from './modal.jsx';
 
 // --- Spinner ----------------------------------------------------------------
 export function Spinner({ label, color = theme.brand }) {
@@ -200,37 +201,94 @@ export function OutputStream({ text, done, exitCode, interrupted, startedAt }) {
   );
 }
 
-// --- Approval menu (vertical, arrow-navigated; R/E/A/N still work) ----------
+// --- Approval modal (Norton-style centered dialog) --------------------------
+// This used to be a flat block in the chat pane's footer. In dual mode a ~50-col
+// pane gives the footer no guaranteed height, so Flexbox squeezed the four
+// options away — you were asked to approve something with nothing to pick from.
+// A decision this important gets a real dialog: it can't be clipped, it shows
+// the FULL command, and each option spells out what it actually does.
 export const APPROVAL_ACTIONS = [
-  { kind: 'run', key: 'R', label: 'Run', hint: 'run it once' },
-  { kind: 'edit', key: 'E', label: 'Edit', hint: 'tweak the command' },
-  { kind: 'always', key: 'A', label: 'Always', hint: 'allowlist this kind' },
-  { kind: 'no', key: 'N', label: 'No', hint: 'decline' },
+  { kind: 'run', key: 'R', label: 'Run',    hint: 'execute it once, this time only' },
+  { kind: 'edit', key: 'E', label: 'Edit',   hint: 'change the command before running' },
+  { kind: 'always', key: 'A', label: 'Always', hint: 'run it and never ask for this kind again' },
+  { kind: 'no', key: 'N', label: 'No',     hint: 'decline — nothing runs' },
 ];
 
-export function ApprovalMenu({ selected, danger }) {
-  const runColor = danger ? theme.danger : theme.ok;
-  const colorFor = (kind) =>
-    kind === 'run' ? runColor :
-    kind === 'edit' ? theme.brand :
-    kind === 'always' ? theme.accent :
-    theme.dim;
+// What the tool is about to do, in plain words. The tool NAME alone ("write",
+// "shell") doesn't say whether something gets executed or a file gets replaced,
+// which is exactly what you need to know before pressing a key.
+const ACTION_VERB = {
+  shell: 'run a shell command',
+  write: 'write to a file',
+  read: 'read a file',
+  websearch: 'search the web',
+  list: 'list a directory',
+  grep: 'search file contents',
+};
+
+export function ApprovalModal({ pending, selected, width }) {
+  const { name, args, danger } = pending;
+  const subject = name === 'shell' ? args.command
+    : name === 'write' ? args.path
+    : name === 'websearch' ? args.query
+    : (args.path || args.pattern || '');
+  const why = args.why;
+  const color = danger ? theme.danger : theme.brand;
+  // Wrap rather than truncate: this is the thing being approved, so every
+  // character of it has to be visible before you can fairly say yes.
+  const bodyWidth = Math.max(24, (width || 60) - 6);
 
   return (
-    <Box flexDirection="column" paddingLeft={4} marginBottom={1}>
+    <Modal
+      width={width}
+      color={color}
+      title={danger ? `${glyphs.skull}  DANGER — approve?` : `${glyphs.bolt}  termita wants to ${ACTION_VERB[name] || `use ${name}`}`}
+      hint={`${glyphs.dot} ↑↓ move · enter select · R/E/A/N · esc cancel`}
+    >
+      {/* The command itself, boxed and full-width so it can't be mistaken for
+          chrome and can't be half-hidden. */}
+      <Box flexDirection="column" borderStyle="round" borderColor={danger ? theme.danger : theme.border} paddingX={1} marginBottom={1}>
+        <Text color={theme.faint}>{name}</Text>
+        <Box width={bodyWidth}>
+          <Text color={theme.text} bold>{subject}</Text>
+        </Box>
+        {name === 'read' && args.range ? <Text color={theme.dim}>range {args.range}</Text> : null}
+      </Box>
+
+      {/* The model's own reason. Shown BEFORE the options: "why am I being
+          asked this" is part of the decision, not a footnote. */}
+      {why && (
+        <Box width={bodyWidth} marginBottom={1}>
+          <Text color={theme.dim} italic>{glyphs.dot} {why}</Text>
+        </Box>
+      )}
+
+      {danger && (
+        <Box width={bodyWidth} marginBottom={1}>
+          <Text color={theme.danger} bold>{glyphs.cross} {danger} — review carefully</Text>
+        </Box>
+      )}
+
       {APPROVAL_ACTIONS.map((a, i) => {
         const active = i === selected;
+        // "Always" on a dangerous command is a trap: the gate re-prompts anyway,
+        // so promising otherwise here would be a lie.
+        const hint = danger && a.kind === 'always'
+          ? 'allowlist it — dangerous commands still prompt'
+          : a.hint;
         return (
-          <Text key={a.kind}>
-            <Text color={active ? colorFor(a.kind) : theme.faint} bold={active}>
-              {active ? glyphs.bullet : ' '} {a.label.padEnd(7)}
-            </Text>
-            <Text color={active ? theme.text : theme.faint}>{a.hint}</Text>
-          </Text>
+          <ModalItem
+            key={a.kind}
+            selected={active}
+            color={a.kind === 'run' ? (danger ? theme.danger : theme.ok) : a.kind === 'no' ? theme.warn : theme.brand}
+          >
+            <Text bold={active}>{a.key}</Text>
+            <Text>  {a.label.padEnd(7)}</Text>
+            <Text color={active ? theme.text : theme.faint}>{hint}</Text>
+          </ModalItem>
         );
       })}
-      <Text color={theme.faint}>  {glyphs.dot} ↑↓ move · enter select · or R/E/A/N · esc cancel</Text>
-    </Box>
+    </Modal>
   );
 }
 

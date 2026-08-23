@@ -47,7 +47,11 @@ export function Pane({
           {children}
         </Box>
       </Box>
-      {footer}
+      {/* flexShrink={0}: the footer carries live state (running command, spinner,
+          queued messages). Without this the greedy scroll region above squeezes
+          it to nothing exactly when a pane is full — which is when that state
+          matters most. */}
+      {footer && <Box flexShrink={0} flexDirection="column">{footer}</Box>}
     </Box>
   );
 }
@@ -56,14 +60,24 @@ export function Pane({
 // to the pane width. Middle-truncates the context (a path's TAIL and a model
 // name's HEAD are the informative ends) rather than letting it wrap and shove
 // the layout around.
-export function PaneTitle({ label, context, width, color, dimColor }) {
-  const avail = Math.max(8, (width || 40) - label.length - 4);
+export function PaneTitle({ label, context, width, color, dimColor, badge, badgeColor }) {
+  // The badge (e.g. auto-approve) is pinned to the RIGHT and reserved FIRST:
+  // it's a mode you're currently in, so it must never be the thing that gets
+  // truncated away when the context string is long.
+  const badgeLen = badge ? badge.length + 2 : 0;
+  const avail = Math.max(8, (width || 40) - label.length - 4 - badgeLen);
   let shown = context || '';
   if (shown.length > avail) shown = `…${shown.slice(-(avail - 1))}`;
   return (
     <Box paddingX={1}>
       <Text color={color} bold>{label}</Text>
       <Text color={dimColor}>{shown ? `  ${shown}` : ''}</Text>
+      {badge && (
+        <>
+          <Box flexGrow={1} />
+          <Text color={badgeColor} bold>{badge}</Text>
+        </>
+      )}
     </Box>
   );
 }

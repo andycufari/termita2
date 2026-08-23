@@ -10,6 +10,7 @@
 // a per-command file on disk via ctx.onFull. When the model needs the omitted
 // middle it greps/reads that file (its path is surfaced in the clamped result).
 import { spawn } from 'node:child_process';
+import { sanitizeOutput } from './sanitize.js';
 
 // Live state shared across calls in one session.
 export const shellState = {
@@ -95,9 +96,16 @@ export function runShell(command, ctx = {}) {
     const onData = (buf) => {
       const s = buf.toString();
       if (!s) return;
-      win.push(s);                 // bounded: only head+tail survive in RAM
-      if (onFull) fullPath = onFull(s) || fullPath; // stream full output to disk
-      if (onChunk) onChunk(s);     // live to the transcript
+      // The DISK copy stays raw — it's the forensic record, and the model can
+      // grep it. Everything that reaches a human or the context window is
+      // stripped of control sequences first: unsanitized bytes written into an
+      // Ink <Text> move the real cursor and clear real regions behind Ink's
+      // back, which is what corrupted the layout when apt/builds ran.
+      if (onFull) fullPath = onFull(s) || fullPath;
+      const clean = sanitizeOutput(s);
+      if (!clean) return;
+      win.push(clean);             // bounded: only head+tail survive in RAM
+      if (onChunk) onChunk(clean); // live to the transcript
     };
 
     child.stdout.on('data', onData);
