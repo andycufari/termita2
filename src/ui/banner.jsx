@@ -43,7 +43,7 @@ const TERMITA_ART = [
 function hintLine(dual) {
   return dual
     ? '/help · tab = switch pane · shift+tab = auto-approve · esc = interrupt'
-    : '/help · tab = auto-approve · /dual = split panes · esc = interrupt';
+    : '/help · shift+tab = auto-approve · /dual = split panes · esc = interrupt';
 }
 
 // wordmark, Argentina flag on the right — this is a statement, not a product.

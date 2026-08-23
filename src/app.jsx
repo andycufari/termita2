@@ -619,8 +619,8 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
         push({ kind: 'notice', text: `dual-pane ON — but this terminal is ${columns} cols; needs ${MIN_DUAL}, so staying classic for now`, level: 'warn' });
       } else {
         push({ kind: 'notice', text: next
-          ? 'dual-pane ON — chat | shell, Tab switches (Shift+Tab auto-approve)'
-          : 'dual-pane OFF — classic single transcript, Tab is auto-approve',
+          ? 'dual-pane ON — chat | shell, Tab switches panes (Shift+Tab auto-approve)'
+          : 'dual-pane OFF — classic single transcript (Shift+Tab auto-approve)',
           level: 'ok' });
       }
       return next;
@@ -872,8 +872,12 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
       return;
     }
 
-    // goncho: in DUAL mode Tab switches panes and auto-approve moves to Shift+Tab;
-    // in classic mode there's no pane to switch, so Tab means auto-approve again.
+    // Shift+Tab is ALWAYS auto-approve; Tab is ALWAYS switch-pane. A binding that
+    // changes meaning with the terminal width can't be learned: this used to fall
+    // back to "Tab = auto-approve" in classic mode, so dragging a window narrower
+    // than MIN_DUAL silently repurposed the key you'd just been using to move
+    // between panes. Shift+Tab also matches what people already expect from
+    // auto-accept elsewhere.
     // Both arrive as key.tab — Ink reports Shift+Tab (\x1b[Z) as {name:'tab', shift:true}, which
     // is verified reliable, so one branch separates them.
     // The `/` menu still owns a plain Tab (PromptInput completes the highlighted
@@ -882,9 +886,9 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
     // AND complete at once.
     if (key.tab) {
       if (key.shift) { doToggleAuto(); return; }
-      // Classic mode has no second pane to switch to, so Tab keeps its ORIGINAL
-      // meaning there (auto-approve) rather than being a dead key.
-      if (!dual) { doToggleAuto(); return; }
+      // Classic mode has only one pane, so there's nothing to switch to — Tab is
+      // simply inert there rather than quietly becoming a different command.
+      if (!dual) return;
       if (matchCommands(input).length === 0) setFocus((f) => (f === 'chat' ? 'shell' : 'chat'));
       return;
     }
@@ -1237,7 +1241,7 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
           {!showCmdMenu && !pending && !toolRunning && !busy && !editing && (
             <Box paddingLeft={1}>
               <Text color={theme.faint}>
-                {dual ? 'tab = switch pane · shift+tab = auto-approve' : 'tab = auto-approve'}
+                {dual ? 'tab = switch pane · shift+tab = auto-approve' : 'shift+tab = auto-approve'}
                 {autoApprove ? ' · ' : ''}
               </Text>
               {autoApprove && <Text color={theme.warn}>auto is ON — commands run without asking</Text>}
