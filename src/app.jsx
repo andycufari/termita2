@@ -26,6 +26,7 @@ import { Pane, PaneTitle } from './ui/pane.jsx';
 import { Modal, ModalItem } from './ui/modal.jsx';
 import { Viewer, ViewerStatus } from './ui/viewer.jsx';
 import { openFile } from './ui/openfile.js';
+import { fileMentions } from './ui/mentions.js';
 import { matchCommands } from './ui/commands.js';
 import { VERSION } from './cli.js';
 
@@ -143,6 +144,9 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
   // open file (null = shell). Keeping it as one nullable object means the pane
   // has exactly two states and they can't both be true.
   const [view, setView] = useState(null);
+  // { files:[{label,path,dir,size}], sel } — the "which file?" picker that /view
+  // opens with no argument.
+  const [filePicker, setFilePicker] = useState(null);
   const shellHistory = useRef([]);
   const shellHistIdx = useRef(-1);
   const [queue, setQueue] = useState([]); // messages typed while busy, sent next turn
@@ -553,6 +557,7 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
         toggleMouse: (v) => doToggleMouse(v),
         toggleDual: (v) => doToggleDual(v),
         openView: (p) => doOpenView(p),
+        pickView: () => doPickView(),
         closeView: () => doCloseView(),
         toggleCognito: (v) => doToggleCognito(v),
         memoryChanged: () => engine.rebuildSystemPrompt(),
@@ -614,6 +619,19 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
   // Open a file in the viewer pane. Turning dual ON is part of opening: the
   // viewer has no home in the classic single-pane layout, and asking someone to
   // run /dual first before /view could work would be a puzzle, not a feature.
+  // `/view` with no path opens a PICKER of the files the model just mentioned,
+  // rather than doing nothing or demanding you retype a path you can see on
+  // screen. The candidates are verified against disk first (see mentions.js), so
+  // every row in the list actually opens.
+  const doPickView = useCallback(() => {
+    const files = fileMentions(itemsRef.current || []);
+    if (!files.length) {
+      push({ kind: 'notice', text: 'no files mentioned yet — /view <path> to open one directly', level: 'dim' });
+      return;
+    }
+    setFilePicker({ files, sel: 0 });
+  }, [push]);
+
   const doOpenView = useCallback((p) => {
     const f = openFile(p);
     if (f.error) { push({ kind: 'notice', text: f.error, level: 'warn' }); return; }
@@ -968,6 +986,28 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
     }
 
     // interactive /model picker owns the keyboard while open
+    // File picker (/view with no path) owns the keyboard while open. Enter opens
+    // the highlighted file; a digit jumps straight to that row, which is faster
+    // than arrowing down a list you can already see.
+    if (filePicker) {
+      const n = filePicker.files.length;
+      if (key.escape) { setFilePicker(null); return; }
+      if (key.upArrow) { setFilePicker((f) => ({ ...f, sel: (f.sel - 1 + n) % n })); return; }
+      if (key.downArrow) { setFilePicker((f) => ({ ...f, sel: (f.sel + 1) % n })); return; }
+      if (key.return) {
+        const pick = filePicker.files[filePicker.sel];
+        setFilePicker(null);
+        if (pick) doOpenView(pick.path);
+        return;
+      }
+      if (/^[1-9]$/.test(inputCh || '')) {
+        const idx = parseInt(inputCh, 10) - 1;
+        if (idx < n) { setFilePicker(null); doOpenView(filePicker.files[idx].path); }
+        return;
+      }
+      return;
+    }
+
     if (picker) {
       if (key.escape) { setPicker(null); return; }
       if (key.upArrow) { setPicker((p) => ({ ...p, sel: (p.sel - 1 + p.models.length) % p.models.length })); return; }
@@ -1074,7 +1114,7 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
   //  · menuOpen   → a self-contained menu that also hides the bottom chrome.
   // Approval is NOT a menuOpen: the chrome below carries the auto/ctx/model
   // footer and the input box, and `Edit` needs that input mounted to type into.
-  const menuOpen = !!(shareMenu || rewind || picker || setupOpen);
+  const menuOpen = !!(shareMenu || rewind || picker || setupOpen || filePicker);
   const modalOpen = !!(pending || menuOpen);
   const modalWidth = Math.min(72, Math.max(40, columns - 8));
 
@@ -1110,6 +1150,19 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
 
   const modalRegion = pending ? (
     <ApprovalModal pending={pending} selected={selected} width={modalWidth} />
+  ) : filePicker ? (
+    <Modal width={modalWidth} title="open which file?" hint="↑↓ select · enter open · 1-9 jump · esc cancel">
+      {filePicker.files.map((f, i) => (
+        <ModalItem key={f.path} selected={i === filePicker.sel}>
+          {/* The number is the shortcut, so it's shown rather than implied. The
+              LABEL is how the model wrote it (that's what you just read on
+              screen); the size/dir tag on the right says what you'd be opening. */}
+          <Text color={theme.faint}>{i < 9 ? `${i + 1} ` : '  '}</Text>
+          {f.label.length > modalWidth - 22 ? '…' + f.label.slice(-(modalWidth - 23)) : f.label}
+          <Text color={theme.faint}>{f.dir ? '  (dir)' : `  ${fmtSize(f.size)}`}</Text>
+        </ModalItem>
+      ))}
+    </Modal>
   ) : shareMenu ? (
     <Modal
       width={modalWidth}
@@ -1608,6 +1661,15 @@ function RunningIndicator({ tool, lastOutputAt, width }) {
 // are stable references (created once, only patched when a tool's status
 // changes), so React.memo skips every item whose props didn't actually change;
 // a keystroke then only re-renders the input + live region. (see #perf)
+// Compact byte count for the file picker: enough to tell a stub from a wall of
+// text before you open it.
+function fmtSize(bytes) {
+  if (bytes == null) return '';
+  if (bytes < 1024) return `${bytes}b`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}k`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}M`;
+}
+
 const TranscriptItem = React.memo(function TranscriptItem({ item, width }) {
   switch (item.kind) {
     case 'msg':

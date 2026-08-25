@@ -223,9 +223,11 @@ export async function runSlash(line, ctx) {
 
     case 'view':
     case 'v': {
-      // /view <path>  → open a file in the viewer pane
-      // /view         → close it (back to the shell transcript)
-      if (!arg) { ctx.closeView?.(); return; }
+      // /view <path>  → open that file in the viewer pane
+      // /view         → pick from the files the model just mentioned
+      // /view off     → close the viewer
+      if (/^(off|close|x)$/i.test(arg)) { ctx.closeView?.(); return; }
+      if (!arg) { ctx.pickView?.(); return; }
       ctx.openView?.(arg);
       return;
     }

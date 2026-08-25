@@ -12,7 +12,7 @@ export const COMMANDS = [
   { name: 'context',   usage: '/context [n]',       desc: 'show / set model context window (gauge)', aliases: ['ctx'] },
   { name: 'mouse',     usage: '/mouse [on|off]',    desc: 'wheel-scroll vs native drag-select/copy', aliases: [] },
   { name: 'dual',      usage: '/dual [on|off]',     desc: 'split chat | shell panes vs classic single view', aliases: [] },
-  { name: 'view',      usage: '/view [path]',       desc: 'read a file in the right pane (no arg closes)', aliases: ['v'] },
+  { name: 'view',      usage: '/view [path|off]',   desc: 'read a file in the right pane (no arg = pick a mentioned file)', aliases: ['v'] },
   { name: 'memory',    usage: '/memory [add|forget|clear]', desc: 'show / manage what termita remembers', aliases: ['mem'] },
   { name: 'cognito',   usage: '/cognito [on|off]',   desc: 'incognito: no memory saved or recalled', aliases: ['incognito'] },
   { name: 'auto',      usage: '/auto',              desc: 'toggle auto-approve (or SHIFT+TAB)', aliases: [] },

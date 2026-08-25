@@ -101,7 +101,8 @@ export function HelpPanel() {
     ['@file', 'attach a file — .md/.txt inlined, images sent (drag-drop too)'],
     ['↑ / ↓', 'history (in input) — your unsent draft is kept'],
     ['wheel / PgUp / Home', 'scroll the transcript'],
-    ['/view <file>', 'read a file in the right pane'],
+    ['/view', 'pick from the files the model just mentioned'],
+    ['/view <file>', 'read that file in the right pane'],
     ['↑↓ ←→ m q', 'in the viewer: scroll · pan · raw/md · close'],
   ];
   return (
