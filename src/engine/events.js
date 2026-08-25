@@ -14,6 +14,7 @@ export const EVENTS = {
   ERROR: 'error', // { message, kind }
   STATUS: 'status', // { text }          transient status line
   NOTICE: 'notice', // { text, level }   inline notice (allowlist etc.)
+  SHOW_USER: 'show_user', // { path, line }  open a file in the user's viewer pane
 };
 
 export class Emitter {

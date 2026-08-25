@@ -90,7 +90,7 @@ export function StreamingMessage({ text, thinking, startedAt }) {
 // --- Tool card --------------------------------------------------------------
 const TOOL_ICON = { shell: '$', write: glyphs.bolt, read: '📖', grep: '🔍', websearch: '🌐' };
 
-export function ToolCard({ name, args, danger, status, awaiting }) {
+export function ToolCard({ name, args, danger, status, awaiting, width }) {
   const isDanger = !!danger;
   const cmd = name === 'shell' ? args.command
     : name === 'write' ? args.path
@@ -105,36 +105,47 @@ export function ToolCard({ name, args, danger, status, awaiting }) {
   // cases that genuinely need attention: a danger flag, or a pending approval.
   if (!isDanger && !awaiting) {
     const dim = status === 'done';
+    // width is the PANE's content width. Without it a long command wraps
+    // against the terminal instead of the pane, so in dual mode it ran straight
+    // through the border and over the pane beside it. truncate-end rather than
+    // wrap: this compact form is a one-line index of what ran, and the head of a
+    // command is the identifying part.
     return (
-      <Box paddingLeft={2}>
-        <Text color={dim ? theme.borderDim : theme.brandDim}>{name} </Text>
-        <Text color={dim ? theme.okDim : theme.ok}>{icon} </Text>
-        <Text color={dim ? theme.dim : theme.text}>{cmd}</Text>
-        {name === 'read' && args.range ? <Text color={theme.dim}> ({args.range})</Text> : null}
+      <Box paddingLeft={2} width={width ? Math.max(10, width - 2) : undefined}>
+        <Text wrap="truncate-end">
+          <Text color={dim ? theme.borderDim : theme.brandDim}>{name} </Text>
+          <Text color={dim ? theme.okDim : theme.ok}>{icon} </Text>
+          <Text color={dim ? theme.dim : theme.text}>{cmd}</Text>
+          {name === 'read' && args.range ? <Text color={theme.dim}> ({args.range})</Text> : null}
+        </Text>
       </Box>
     );
   }
 
   // Expanded: danger or awaiting a decision — worth the space and the border.
   const borderColor = isDanger ? theme.danger : theme.border;
+  // The expanded card WRAPS rather than truncating — it's shown because the
+  // command needs reading (danger / pending approval), so hiding its tail would
+  // defeat the point. It just has to wrap inside the pane, not the terminal.
+  const cardWidth = width ? Math.max(10, width - 2) : undefined;
   return (
-    <Box flexDirection="column" paddingLeft={2} marginBottom={awaiting ? 0 : 1}>
+    <Box flexDirection="column" paddingLeft={2} marginBottom={awaiting ? 0 : 1} width={cardWidth}>
       <Box
         flexDirection="column"
         borderStyle={isDanger ? box.danger : box.tool}
         borderColor={borderColor}
         paddingX={1}
       >
-        <Text color={isDanger ? theme.danger : theme.brandDim} bold>
+        <Text color={isDanger ? theme.danger : theme.brandDim} bold wrap="truncate-end">
           {isDanger ? `${glyphs.skull} ${name}  DANGER` : name}
         </Text>
-        <Text color={isDanger ? theme.danger : theme.ok}>
+        <Text color={isDanger ? theme.danger : theme.ok} wrap="wrap">
           {icon} <Text color={theme.text}>{cmd}</Text>
         </Text>
-        {name === 'read' && args.range && <Text color={theme.dim}>  range {args.range}</Text>}
-        {why && <Text color={theme.dim} italic>{why}</Text>}
+        {name === 'read' && args.range && <Text color={theme.dim} wrap="truncate-end">  range {args.range}</Text>}
+        {why && <Text color={theme.dim} italic wrap="wrap">{why}</Text>}
         {isDanger && (
-          <Text color={theme.danger} bold>{glyphs.cross} {danger} — review carefully</Text>
+          <Text color={theme.danger} bold wrap="wrap">{glyphs.cross} {danger} — review carefully</Text>
         )}
       </Box>
     </Box>
@@ -331,7 +342,7 @@ export function MascotTag({ version }) {
 }
 
 // --- Inline notices / errors ------------------------------------------------
-export function Notice({ text, level }) {
+export function Notice({ text, level, width }) {
   const color =
     level === 'ok' ? theme.ok :
     level === 'warn' ? theme.warn :
@@ -342,18 +353,20 @@ export function Notice({ text, level }) {
     level === 'warn' ? '!' :
     level === 'danger' ? glyphs.cross :
     glyphs.dot;
+  // Bounded to the pane: notices carry paths and command echoes, which are
+  // exactly the strings long enough to wrap past a half-width pane's border.
   return (
-    <Box paddingLeft={2} marginBottom={1}>
-      <Text color={color}>{icon} {text}</Text>
+    <Box paddingLeft={2} marginBottom={1} width={width ? Math.max(10, width - 2) : undefined}>
+      <Text color={color} wrap="wrap">{icon} {text}</Text>
     </Box>
   );
 }
 
-export function ErrorBox({ message }) {
+export function ErrorBox({ message, width }) {
   return (
-    <Box paddingLeft={2} marginBottom={1}>
+    <Box paddingLeft={2} marginBottom={1} width={width ? Math.max(10, width - 2) : undefined}>
       <Box borderStyle="round" borderColor={theme.danger} paddingX={1}>
-        <Text color={theme.danger}>{glyphs.cross} {message}</Text>
+        <Text color={theme.danger} wrap="wrap">{glyphs.cross} {message}</Text>
       </Box>
     </Box>
   );

@@ -141,20 +141,46 @@ const HEADING_COLOR = [null, 'brand', 'accent', 'ok', 'warn', 'brandDim', 'dim']
 
 function Table({ header, rows, width }) {
   const cols = header.length;
+  // Rows are normalised to the header's column count. A model that emits a
+  // ragged row (an unescaped `|` inside a cell is the common cause) used to
+  // render EXTRA columns on that row only, so the row ran past the pane border
+  // while every other row stayed inside it.
+  const norm = rows.map((r) => Array.from({ length: cols }, (_, c) => r[c] ?? ''));
+
   // natural width of each column = widest visible cell
   const widths = header.map((h, c) => {
     let w = visLen(h);
-    for (const r of rows) w = Math.max(w, visLen(r[c] || ''));
+    for (const r of norm) w = Math.max(w, visLen(r[c] || ''));
     return w;
   });
-  // clamp total to terminal width (2 padding + 1 separator per column)
-  const budget = Math.max(20, (width || 80) - 4);
-  const overhead = cols * 3 + 1;
-  let total = widths.reduce((a, b) => a + b, 0) + overhead;
-  if (total > budget) {
-    // shrink proportionally, floor 4
-    const scale = (budget - overhead) / (total - overhead);
-    for (let c = 0; c < cols; c++) widths[c] = Math.max(4, Math.floor(widths[c] * scale));
+
+  // Clamp to the pane. Every column costs its own width plus 3 columns of
+  // chrome (" │ "), and the row opens with a 2-column "│ " — so the real cost
+  // is cols*3 + 2, not cols*3 + 1. The old figure was one short, which is why
+  // a table sized to "exactly the budget" still poked one column past the
+  // border.
+  const budget = Math.max(8, width || 80);
+  const overhead = cols * 3 + 2;
+  const MIN_COL = 3;
+  let avail = budget - overhead;
+  if (avail < cols * MIN_COL) avail = cols * MIN_COL; // degenerate: see clamp below
+  const total = widths.reduce((a, b) => a + b, 0);
+  if (total > avail) {
+    // Shrink proportionally, then repair: flooring each column and applying a
+    // MIN_COL floor can push the sum back OVER the budget (worst with many
+    // columns, where the floor dominates). So after scaling we walk the widest
+    // columns down until the row genuinely fits — the previous code trusted the
+    // scale factor and silently overflowed.
+    const scale = avail / total;
+    for (let c = 0; c < cols; c++) widths[c] = Math.max(MIN_COL, Math.floor(widths[c] * scale));
+    let sum = widths.reduce((a, b) => a + b, 0);
+    while (sum > avail) {
+      let widest = 0;
+      for (let c = 1; c < cols; c++) if (widths[c] > widths[widest]) widest = c;
+      if (widths[widest] <= 1) break; // can't shrink further; nothing left to give
+      widths[widest] -= 1;
+      sum -= 1;
+    }
   }
 
   const cell = (txt, c) => {
@@ -165,8 +191,11 @@ function Table({ header, rows, width }) {
     return { clipped, pad };
   };
 
+  // wrap="truncate-end" is the backstop: even if a width calculation is wrong
+  // for some input we haven't seen, the row gets cut at the pane edge instead
+  // of wrapping and shoving the layout around.
   const Row = ({ cells, bold, keyp }) => (
-    <Text>
+    <Text wrap="truncate-end">
       <Text color={theme.faint}>│ </Text>
       {cells.map((txt, c) => {
         const { clipped, pad } = cell(txt, c);
@@ -182,16 +211,16 @@ function Table({ header, rows, width }) {
   );
 
   const rule = (
-    <Text color={theme.faint}>
-      {'├─' + widths.map((w) => '─'.repeat(w + 1)).join('─┼─') + '─┤'}
+    <Text color={theme.faint} wrap="truncate-end">
+      {'├─' + widths.map((w) => '─'.repeat(w + 1)).join('┼─') + '┤'}
     </Text>
   );
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" width={budget}>
       <Row cells={header} bold keyp="h" />
       {rule}
-      {rows.map((r, ri) => <Row key={ri} cells={r} keyp={`r${ri}`} />)}
+      {norm.map((r, ri) => <Row key={ri} cells={r} keyp={`r${ri}`} />)}
     </Box>
   );
 }
@@ -211,11 +240,15 @@ function Block({ block, width }) {
       return <Text bold color={color} wrap="wrap">{block.level <= 2 ? '' : '· '}{renderInline(block.text, 'h')}</Text>;
     }
     case 'code':
+      // Bounded to the pane and truncated, not wrapped. Code is the block most
+      // likely to hold lines longer than a half-width pane, and unbounded it ran
+      // through the border into the pane beside it. Truncating keeps one source
+      // line on one row — a wrapped code line reads as two statements.
       return (
-        <Box flexDirection="column" borderStyle="round" borderColor={theme.borderDim} paddingX={1}>
-          {block.lang ? <Text color={theme.brandDim}>{block.lang}</Text> : null}
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.borderDim} paddingX={1} width={width ? Math.max(12, width) : undefined}>
+          {block.lang ? <Text color={theme.brandDim} wrap="truncate-end">{block.lang}</Text> : null}
           {(block.lines.length ? block.lines : ['']).map((l, i) => (
-            <Text key={i} color={theme.ok}>{l || ' '}</Text>
+            <Text key={i} color={theme.ok} wrap="truncate-end">{l || ' '}</Text>
           ))}
         </Box>
       );
@@ -223,7 +256,7 @@ function Block({ block, width }) {
       return <Table header={block.header} rows={block.rows} width={width} />;
     case 'quote':
       return (
-        <Box flexDirection="column" paddingLeft={1} borderStyle="single" borderColor={theme.brandDim} borderTop={false} borderRight={false} borderBottom={false}>
+        <Box flexDirection="column" paddingLeft={1} borderStyle="single" borderColor={theme.brandDim} borderTop={false} borderRight={false} borderBottom={false} width={width ? Math.max(12, width) : undefined}>
           {block.lines.map((l, i) => <Text key={i} color={theme.dim} italic wrap="wrap">{renderInline(l, `q${i}`)}</Text>)}
         </Box>
       );

@@ -221,6 +221,15 @@ export async function runSlash(line, ctx) {
       return;
     }
 
+    case 'view':
+    case 'v': {
+      // /view <path>  → open a file in the viewer pane
+      // /view         → close it (back to the shell transcript)
+      if (!arg) { ctx.closeView?.(); return; }
+      ctx.openView?.(arg);
+      return;
+    }
+
     case 'credits':
     case 'about':
       push({ kind: 'msg', who: 'term', text: '🏴‍☠️ termita 🇦🇷\n@andycufari · 2026\nEnjoy the ride 🏴‍☠️ 🇦🇷' });

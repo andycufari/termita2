@@ -26,10 +26,13 @@ export const DEFAULT_CONFIG = {
   // 1000) makes many terminals withhold drag-to-select, and losing copy/paste
   // hurts more than losing wheel-scroll — PgUp/PgDn/Home/End still scroll. Turn
   // the wheel on with /mouse when you want it. See use-mouse-wheel.js.
-  // dualPane: the Norton-style split (chat | shell). Toggle with /dual; the
-  // width fallback still wins — under MIN_DUAL columns two panes don't fit, so
-  // we render the single classic transcript regardless of this setting.
-  ui: { theme: 'neon', mouseCapture: false, dualPane: true },
+  // dualPane: the Norton-style split (chat | shell). OFF by default — the split
+  // halves the width available to prose, tables and code, which is the wrong
+  // trade for a first run; turn it on with /dual when you actually want to watch
+  // a command and the conversation at once. The width fallback still wins on top
+  // of this: under MIN_DUAL columns two panes don't fit, so we render the single
+  // classic transcript regardless of the setting.
+  ui: { theme: 'neon', mouseCapture: false, dualPane: false },
   policy: { allowlist: [], autoRunReadOnly: true, autoApprove: false },
   // Web search (Brave). Empty key → the websearch tool stays hidden from the
   // model. Set via `/websearch <key>` or the BRAVE_API_KEY env var.

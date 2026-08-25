@@ -108,11 +108,30 @@ export const TOOL_SCHEMAS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'show_user',
+      description:
+        "Open a file in the user's viewer pane so they can READ it themselves, side by side with the conversation. This does NOT return the file's contents to you — use `read` for that. Use this when you're discussing a specific file and the user needs to see it (a document you're editing together, a diff you're explaining, a config you're asking them to check). Opening a directory shows its listing. Markdown renders formatted.",
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'file or directory to show the user' },
+          line: { type: 'integer', description: 'optional 1-based line to scroll to' },
+        },
+        required: ['path'],
+      },
+    },
+  },
 ];
 
-export const READ_ONLY_TOOLS = new Set(['read', 'grep', 'websearch']);
+// show_user is read-only in the sense that matters for the gate: it touches no
+// state the user would want to approve — it only changes what's displayed in
+// their own pane, which they can close with `q`.
+export const READ_ONLY_TOOLS = new Set(['read', 'grep', 'websearch', 'show_user']);
 export const MUTATING_TOOLS = new Set(['shell', 'write']);
-export const KNOWN_TOOLS = new Set(['shell', 'read', 'grep', 'write', 'websearch', 'memory']);
+export const KNOWN_TOOLS = new Set(['shell', 'read', 'grep', 'write', 'websearch', 'memory', 'show_user']);
 
 // Resolve the Brave API key: config.search.braveApiKey wins, else BRAVE_API_KEY
 // env var. Returns '' when neither is set (→ websearch stays hidden).
@@ -168,9 +187,32 @@ export async function executeTool(toolName, args, ctx = {}) {
       return webSearch(args.query, { count: args.count, braveApiKey: ctx.braveApiKey, signal: ctx.signal });
     case 'memory':
       return runMemory(args, ctx);
+    case 'show_user':
+      return showUser(args, ctx);
     default:
       return { output: `error: unknown tool "${toolName}"`, meta: { error: true } };
   }
+}
+
+// The `show_user` tool. Opens a file in the user's viewer pane.
+//
+// The tool itself does no I/O beyond a stat: the UI owns the viewer, so this
+// hands the request up via `meta.showUser` and the app opens it. Returning the
+// content here would be wrong twice over — it would burn context on a file the
+// model didn't ask to read, and it would let `show_user` masquerade as `read`.
+function showUser(args, ctx = {}) {
+  const p = args?.path;
+  if (!p || !String(p).trim()) return { output: 'error: show_user needs a path', meta: { error: true } };
+  if (!ctx.onShowUser) {
+    // No viewer available (headless / --print). Say so plainly rather than
+    // silently succeeding — the model would otherwise tell the user to look at
+    // a pane that never opened.
+    return { output: 'no viewer available in this mode — the file was not shown', meta: {} };
+  }
+  const res = ctx.onShowUser(String(p), args?.line);
+  if (res?.error) return { output: `could not show ${p}: ${res.error}`, meta: { error: true } };
+  const where = res?.path || p;
+  return { output: `showing ${where} in the user's viewer pane`, meta: { shown: where } };
 }
 
 // The `memory` tool. Adds/lists/forgets durable user facts. `meta.memoryChanged`

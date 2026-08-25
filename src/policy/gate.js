@@ -1,6 +1,7 @@
 // Approval policy: allowlist (user-blessed command shapes), danger patterns,
 // and auto-approve mode. Decides whether a tool call needs a human prompt.
 import { saveConfig } from '../config/config.js';
+import { READ_ONLY_TOOLS } from '../tools/index.js';
 
 // Commands that match these can NEVER be silently auto-allowed. They always
 // prompt with a loud warning — even in auto-approve mode, even if allowlisted.
@@ -108,8 +109,12 @@ export class Gate {
   //   auto   -> run without asking
   //   prompt -> show the approval card
   resolve(toolName, args) {
-    // read-only tools always auto-run
-    if (toolName === 'read' || toolName === 'grep') {
+    // Read-only tools always auto-run. This reads the SHARED set rather than a
+    // second hardcoded list: the two had already drifted — `websearch` was in
+    // READ_ONLY_TOOLS but missing here, so a search prompted for approval it was
+    // never supposed to need. Adding a read-only tool now only means adding it
+    // in one place.
+    if (READ_ONLY_TOOLS.has(toolName)) {
       return { action: 'auto', reason: 'read-only' };
     }
 

@@ -92,15 +92,17 @@ export function HelpPanel() {
   // Derived from the shared command registry so help never drifts from reality.
   const rows = COMMANDS.map((c) => [c.usage, c.desc]);
   const keys = [
-    ['TAB', 'switch pane (dual) / toggle auto-approve (classic)'],
-    ['Shift+TAB', 'toggle auto-approve (dual layout)'],
+    ['Shift+TAB', 'toggle auto-approve (always, any layout)'],
+    ['TAB', 'switch pane (dual layout)'],
     ['R / E / A / N', 'run / edit / always / no'],
     ['Esc', 'interrupt streaming or a prompt'],
     ['!command', 'run it yourself in the terminal (e.g. !ls, !vim x)'],
     ['!!command', 'force full-terminal mode (a TUI it didn\'t detect)'],
     ['@file', 'attach a file — .md/.txt inlined, images sent (drag-drop too)'],
-    ['↑ / ↓', 'history (in input)'],
+    ['↑ / ↓', 'history (in input) — your unsent draft is kept'],
     ['wheel / PgUp / Home', 'scroll the transcript'],
+    ['/view <file>', 'read a file in the right pane'],
+    ['↑↓ ←→ m q', 'in the viewer: scroll · pan · raw/md · close'],
   ];
   return (
     <Box flexDirection="column" paddingLeft={2} marginBottom={1}>

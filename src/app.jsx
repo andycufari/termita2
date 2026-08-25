@@ -24,6 +24,8 @@ import { useMouseWheel } from './ui/use-mouse-wheel.js';
 import { usePaneScroll } from './ui/pane-scroll.js';
 import { Pane, PaneTitle } from './ui/pane.jsx';
 import { Modal, ModalItem } from './ui/modal.jsx';
+import { Viewer, ViewerStatus } from './ui/viewer.jsx';
+import { openFile } from './ui/openfile.js';
 import { matchCommands } from './ui/commands.js';
 import { VERSION } from './cli.js';
 
@@ -137,6 +139,10 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
   // (`!cd` sticks), so React won't re-render on it. Mirror it into state whenever
   // a turn ends, which is when it can have changed.
   const [shellCwd, setShellCwd] = useState(() => shellState.cwd);
+  // The right pane shows EITHER the shell transcript or a file. `view` holds the
+  // open file (null = shell). Keeping it as one nullable object means the pane
+  // has exactly two states and they can't both be true.
+  const [view, setView] = useState(null);
   const shellHistory = useRef([]);
   const shellHistIdx = useRef(-1);
   const [queue, setQueue] = useState([]); // messages typed while busy, sent next turn
@@ -164,22 +170,46 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
   // Two gates: the user's preference (/dual, persisted) AND enough width. The
   // width check still wins — two panes genuinely don't fit under MIN_DUAL, so a
   // saved `true` can't force an unreadable layout on a narrow terminal.
-  const [dualPref, setDualPref] = useState(config.ui?.dualPane !== false);
+  // === true, not !== false: an unset/absent value means OFF, matching the
+  // default. `!== false` would have treated a missing key as opt-IN, so the
+  // flipped default would never reach anyone with an existing config file.
+  const [dualPref, setDualPref] = useState(config.ui?.dualPane === true);
   const dual = dualPref && columns >= MIN_DUAL;
   // Leaving dual (via /dual off OR shrinking the terminal) with focus on the
   // shell would strand the input in shell mode — `$` prompt, no visible pane,
   // and Tab no longer switches back. Snap focus to chat whenever dual drops.
-  useEffect(() => { if (!dual) setFocus('chat'); }, [dual]);
+  // The viewer closes with it — but ONLY on a real transition out of dual, not
+  // whenever `dual` merely happens to be false. /view turns dualPref on and
+  // opens a file; if the terminal is too narrow, `dual` stays false, and a naive
+  // `if (!dual) setView(null)` would close that file the instant it opened —
+  // right after telling the user to widen their terminal to see it. Tracking the
+  // previous value means the viewer survives until dual is actually lost.
+  const wasDual = useRef(dual);
+  useEffect(() => {
+    if (!dual) {
+      setFocus('chat');
+      if (wasDual.current) setView(null); // we HAD two panes and just lost them
+    }
+    wasDual.current = dual;
+  }, [dual]);
 
   // Are we typing into the shell? Drives the prompt marker, the input border and
   // the pane highlight — one flag so they can never disagree.
   const shellFocus = focus === 'shell';
+  // Reading mode: the file pane is open AND has the keyboard. This is the state
+  // where the prompt is swapped for the viewer's key bar — see the input row.
+  const viewing = !!view && shellFocus;
   const leftWidth = dual ? Math.floor(columns / 2) : columns;
   const rightWidth = dual ? columns - leftWidth : columns;
-  // Width available for CONTENT inside a pane: the border eats 2 columns, and
-  // TranscriptItem/Banner/clampText all size against usable text width.
-  const chatWidth = Math.max(20, (dual ? leftWidth : columns) - (dual ? 4 : 0));
-  const shellWidth = Math.max(20, rightWidth - 4);
+  // Width available for CONTENT inside a pane. Panes are only `bordered` in dual
+  // mode, and a border costs 2 columns (one per side) — so classic mode pays
+  // nothing and dual pays 2. The old figures charged 4 in dual (double-counting
+  // the border) and, worse, charged the shell pane 4 even in CLASSIC mode where
+  // it has no border at all — so the two panes disagreed about the width of the
+  // same screen. Both now derive from one rule.
+  const PANE_CHROME = dual ? 2 : 0;
+  const chatWidth = Math.max(20, (dual ? leftWidth : columns) - PANE_CHROME);
+  const shellWidth = Math.max(20, rightWidth - PANE_CHROME);
 
   // Split the transcript by kind: the chat pane keeps messages, tool cards and
   // notices; the shell pane takes command output. They read the SAME items array
@@ -215,6 +245,14 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
     extraRows: 0,          // no banner in the shell pane
     chromeRows: SHELL_CHROME_ROWS,
   });
+  // Rows the viewer can paint. It borrows the shell pane's chrome budget and
+  // pays one more row for its own status line. Held in a ref because the key
+  // handler (a stable useInput callback) reads it at keypress time — reading a
+  // captured value there would page by whatever the height was on mount.
+  const viewerHeight = Math.max(1, rows - SHELL_CHROME_ROWS - 1);
+  const viewerHeightRef = useRef(viewerHeight);
+  viewerHeightRef.current = viewerHeight;
+
   // Scroll keys act on the FOCUSED pane.
   const activeScroll = focus === 'shell' ? shellScroll : chatScroll;
   const { scrollBy, maxScrollRef, viewportRef } = activeScroll;
@@ -390,6 +428,23 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
         case EVENTS.STATUS:
           setStatus(ev.text);
           break;
+        case EVENTS.SHOW_USER: {
+          const f = openFile(ev.path);
+          if (f.error) { push({ kind: 'notice', text: f.error, level: 'warn' }); break; }
+          // `line` scrolls so the requested line is the FIRST visible row; the
+          // model asked for it because that's where the interesting part starts.
+          if (ev.line && f.lines) f.offset = Math.max(0, Math.min(f.lines.length - 1, ev.line - 1));
+          setView(f);
+          // Opening a file is only useful if the pane it lands in is visible.
+          // In classic mode there IS no second pane, so say where it went
+          // instead of silently doing nothing the user can see.
+          setDualPref(true);
+          // Tell the engine the request was handled — this is what makes
+          // show_user report honestly in modes with no viewer.
+          ev.handled = true;
+          push({ kind: 'notice', text: `showing ${f.name || ev.path} in the viewer pane${columns < MIN_DUAL ? ' (widen the terminal to see it)' : ''}`, level: 'ok' });
+          break;
+        }
         default:
           break;
       }
@@ -497,6 +552,8 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
         setContextSize: (n) => doSetContextSize(n),
         toggleMouse: (v) => doToggleMouse(v),
         toggleDual: (v) => doToggleDual(v),
+        openView: (p) => doOpenView(p),
+        closeView: () => doCloseView(),
         toggleCognito: (v) => doToggleCognito(v),
         memoryChanged: () => engine.rebuildSystemPrompt(),
         showHelp: () => push({ kind: 'help' }),
@@ -553,6 +610,26 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
       await engine.runBangShell(cmd);
     }
   }, [engine, busy, push, suspendRunner]);
+
+  // Open a file in the viewer pane. Turning dual ON is part of opening: the
+  // viewer has no home in the classic single-pane layout, and asking someone to
+  // run /dual first before /view could work would be a puzzle, not a feature.
+  const doOpenView = useCallback((p) => {
+    const f = openFile(p);
+    if (f.error) { push({ kind: 'notice', text: f.error, level: 'warn' }); return; }
+    setView(f);
+    setDualPref(true);
+    setFocus('shell');            // you asked to read it — put the keys there
+    if (columns < MIN_DUAL) {
+      // Honest about the width gate rather than opening into an invisible pane.
+      push({ kind: 'notice', text: `viewer opened, but the terminal is ${columns} cols — needs ${MIN_DUAL} to show both panes`, level: 'warn' });
+    }
+  }, [push, columns]);
+
+  const doCloseView = useCallback(() => {
+    setView(null);
+    setFocus('chat');
+  }, []);
 
   const doToggleAuto = useCallback(() => {
     setAutoApprove((cur) => {
@@ -805,6 +882,33 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
   // --- Key handling: approval, edit, interrupt, tab, ctrl-c -----------------
   // Disabled while the setup wizard is open (it owns the keyboard).
   useInput((inputCh, key) => {
+    // The VIEWER owns the keyboard while it's focused — it's a modal reading
+    // surface, so its arrows/paging must beat the transcript scroll below (which
+    // would otherwise swallow PgUp/PgDn before the file ever saw them).
+    // Deliberately narrow: only when the file pane is BOTH open and focused, so
+    // it can never hijack keys while you're typing in chat.
+    if (view && shellFocus && !modalOpen) {
+      const vh = Math.max(1, viewerHeightRef.current);
+      const last = Math.max(0, (view.lines?.length || 1) - 1);
+      const move = (d) => setView((v) => (v ? { ...v, offset: Math.max(0, Math.min(last, v.offset + d)) } : v));
+      if (key.upArrow && !key.ctrl) { move(-1); return; }
+      if (key.downArrow && !key.ctrl) { move(1); return; }
+      if (key.pageUp) { move(-(vh - 1)); return; }
+      if (key.pageDown) { move(vh - 1); return; }
+      if (key.home) { move(-Infinity); return; }
+      if (key.end) { move(Infinity); return; }
+      // ←/→ pan a raw file sideways rather than wrapping it (wrapping would
+      // break the line-number/row correspondence). Rendered Markdown wraps, so
+      // panning is meaningless there and is skipped.
+      if (key.leftArrow && !view.rendered) { setView((v) => ({ ...v, hOffset: Math.max(0, v.hOffset - 8) })); return; }
+      if (key.rightArrow && !view.rendered) { setView((v) => ({ ...v, hOffset: v.hOffset + 8 })); return; }
+      const ch = inputCh?.toLowerCase();
+      // `m` only toggles for files that ARE Markdown — offering a "rendered"
+      // mode for a .js file would just mangle it.
+      if (ch === 'm' && view.markdown) { setView((v) => ({ ...v, rendered: !v.rendered })); return; }
+      if (ch === 'q' || key.escape) { setView(null); setFocus('chat'); return; }
+    }
+
     // Transcript scroll (alt-screen has no native scrollback). Works in any
     // state so you can scroll while busy/streaming. PgUp/PgDn step by ~a page;
     // Home jumps to the top, End/PgDn-to-0 returns to the latest. `scrollUp` is
@@ -1100,20 +1204,33 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
             clipBottom={shellScroll.clipBottom}
             title={dual ? (
               <PaneTitle
-                label="shell"
-                context={shellCwd.startsWith(homedir()) ? `~${shellCwd.slice(homedir().length)}` : shellCwd}
+                label={view ? 'view' : 'shell'}
+                context={view
+                  ? (view.name || view.path)
+                  : (shellCwd.startsWith(homedir()) ? `~${shellCwd.slice(homedir().length)}` : shellCwd)}
                 width={shellWidth}
-                color={focus === 'shell' ? theme.shell : theme.dim}
+                color={focus === 'shell' ? (view ? theme.brand : theme.shell) : theme.dim}
                 dimColor={theme.faint}
               />
             ) : null}
+            /* The viewer's status line lives in the pane FOOTER, so it stays put
+               while the file scrolls under it — same reason the title does. */
+            footer={view && dual ? (
+              <ViewerStatus file={view} height={viewerHeight} focused={focus === 'shell'} width={shellWidth} />
+            ) : null}
           >
-            {shellScroll.shownItems.length === 0 && (
-              <Text color={theme.faint}>  shell — tab to switch, type a command (no ! needed)</Text>
+            {view ? (
+              <Viewer file={view} width={shellWidth} height={viewerHeight} focused={focus === 'shell'} />
+            ) : (
+              <>
+                {shellScroll.shownItems.length === 0 && (
+                  <Text color={theme.faint}>  shell — tab to switch, type a command (no ! needed)</Text>
+                )}
+                {shellScroll.shownItems.map((it) => (
+                  <TranscriptItem key={it._k} item={it} width={shellWidth} />
+                ))}
+              </>
             )}
-            {shellScroll.shownItems.map((it) => (
-              <TranscriptItem key={it._k} item={it} width={shellWidth} />
-            ))}
           </Pane>
         )}
       </Box>
@@ -1188,6 +1305,20 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
                   <TextInput value={editing.value} onChange={(v) => setEditing((e) => ({ ...e, value: v }))} onSubmit={submitEdit} />
                 </Box>
               </>
+            ) : viewing ? (
+              /* Reading a file: the prompt is REPLACED by a key bar rather than
+                 left mounted. A mounted TextInput is focused, so it would eat
+                 every keystroke before the viewer's handler ran — j/q/m would
+                 have been typed into an invisible shell command instead of
+                 scrolling the file. Unmounting it is what makes the viewer's
+                 keys actually reach the viewer. */
+              <Box flexShrink={0}>
+                <Text color={theme.brand} bold>{glyphs.dot} reading  </Text>
+                <Text color={theme.faint} wrap="truncate-end">
+                  ↑↓ pgup/pgdn scroll · {view?.rendered ? '←→ n/a · ' : '←→ pan · '}
+                  {view?.markdown ? 'm raw/md · ' : ''}tab back to chat · q close
+                </Text>
+              </Box>
             ) : (
               <>
                 {/* goncho: ONE input, two identities. Tab doesn't move you to a
@@ -1314,15 +1445,33 @@ function PromptInput({ value, onChange, onSubmit, disabled, history, histIdx, se
     //    setInput('') and silently eat everything you'd typed.
     //  - ↑ stashes the draft before the first overwrite; ↓ back past the newest
     //    entry restores it verbatim.
+    //
+    // The stash is re-taken on EVERY entry into history, and `histIdx` is
+    // treated as advisory rather than trusted. Two ways the old version still
+    // lost a draft, both of which the ref alone couldn't see:
+    //  · histIdx is a ref owned by the PARENT and reset to -1 on every submit,
+    //    while `draft` is local to this component. After submitting, typing a
+    //    new line and pressing ↑, the two disagreed about whether we were
+    //    "entering" history.
+    //  · typing `/` opens the command menu, which OWNS ↑↓ (above). Deleting the
+    //    `/` closes it mid-navigation, leaving histIdx pointing into history
+    //    with a live draft on screen — the next ↑ then overwrote it without
+    //    stashing, because histIdx said we were already inside.
+    // Re-stashing whenever the visible text isn't the history entry we last
+    // placed there closes both: the draft that gets restored is always the text
+    // that was actually on screen when history nav began.
     if (key.upArrow) {
       const h = history.current;
       if (h.length === 0) return;
-      if (histIdx.current === -1) draft.current = value; // entering history: stash
+      const inHistory = histIdx.current >= 0 && h[histIdx.current] === value;
+      if (!inHistory) { draft.current = value; histIdx.current = -1; }
       histIdx.current = Math.min(histIdx.current + 1, h.length - 1);
       setInput(h[histIdx.current]);
     } else if (key.downArrow) {
       const h = history.current;
-      if (histIdx.current < 0) return; // not in history — leave the draft alone
+      // Not navigating (or the text was edited since) — the draft on screen is
+      // the newest thing there is, so ↓ has nowhere to go. Leave it alone.
+      if (histIdx.current < 0 || h[histIdx.current] !== value) return;
       if (histIdx.current === 0) { histIdx.current = -1; setInput(draft.current); }
       else { histIdx.current -= 1; setInput(h[histIdx.current]); }
     }
@@ -1465,21 +1614,30 @@ const TranscriptItem = React.memo(function TranscriptItem({ item, width }) {
       return <Message who={item.who} text={item.text} reasoning={item.reasoning} thoughtMs={item.thoughtMs} width={width} />;
     case 'tool':
       // just the proposal card; output streams below as separate 'output' items
-      return <ToolCard name={item.name} args={item.args} danger={item.danger} status={item.status} />;
+      return <ToolCard name={item.name} args={item.args} danger={item.danger} status={item.status} width={width} />;
     case 'output':
       // one line of shell output. Readable text (not theme.dim) — dim made a
       // whole pane of command output look greyed-out/disabled. The leading gutter
       // bar stays faint so the output still reads as secondary to messages.
-      return <Text color={theme.text} wrap="wrap"><Text color={theme.faint}>  │ </Text>{item.text || ' '}</Text>;
+      //
+      // Boxed to the pane width: command output is the longest thing in the
+      // transcript (paths, git status, build logs) and unboxed it wrapped
+      // against the TERMINAL, so in dual mode long lines ran past the border and
+      // printed over the neighbouring pane.
+      return (
+        <Box width={width ? Math.max(10, width) : undefined}>
+          <Text color={theme.text} wrap="wrap"><Text color={theme.faint}>  │ </Text>{item.text || ' '}</Text>
+        </Box>
+      );
     case 'tooldone': {
       const color = item.interrupted ? theme.warn : (item.exitCode === 0 || item.exitCode == null) ? theme.okDim : theme.danger;
       const label = item.interrupted ? '⊘ interrupted' : (item.exitCode === 0 || item.exitCode == null) ? '✓ done' : `✗ exit ${item.exitCode}`;
       return <Text color={color} bold>  {label}</Text>;
     }
     case 'notice':
-      return <Notice text={item.text} level={item.level} />;
+      return <Notice text={item.text} level={item.level} width={width} />;
     case 'error':
-      return <ErrorBox message={item.message} />;
+      return <ErrorBox message={item.message} width={width} />;
     case 'trim':
       return (
         <Text color={theme.faint} italic>

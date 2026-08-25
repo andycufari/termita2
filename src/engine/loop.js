@@ -185,6 +185,15 @@ export class Engine {
       onChunk: (chunk) => this.events.emit(EVENTS.TOOL_OUTPUT, { id, chunk }),
       onFull: outFile ? (chunk) => { this.log.appendOutput(outFile, chunk); return outFile; } : null,
       braveApiKey: braveKey(this.gate?.config), // for the websearch tool
+      // show_user opens a file in the UI's viewer pane. The engine stays free of
+      // UI imports, so it just announces the request and the app decides — which
+      // also means the tool degrades honestly when there's no viewer (--print):
+      // no listener, no `shown`, and the model is told it wasn't displayed.
+      onShowUser: (p, line) => {
+        const shown = { path: p, line, handled: false };
+        this.events.emit(EVENTS.SHOW_USER, shown);
+        return shown.handled ? { path: shown.path } : { error: 'no viewer pane is open' };
+      },
     };
 
     if (name === 'shell') this.log.command(args.command, args.why);
