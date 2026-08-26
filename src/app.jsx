@@ -15,6 +15,7 @@ import { saveConfig } from './config/config.js';
 import { setCognito as memSetCognito } from './config/memory.js';
 import { runDirectProcess, isInteractive } from './tools/interactive.js';
 import { shellState } from './tools/shell.js';
+import { toolSchemas } from './tools/index.js';
 import { homedir } from 'node:os';
 import { buildUserContent } from './attach.js';
 import { runSlash } from './slash.js';
@@ -40,7 +41,13 @@ const uid = () => `i${++_id}`;
 // on-screen lines loses nothing recoverable: the model still greps the disk log.
 // Kept modest on purpose — this also caps per-keystroke render/layout cost.
 const MAX_ITEMS = 600;
-const TRIM_TO = 550; // trim in a batch (not every append) to avoid array churn
+// Trim ONE item at a time once we're over the cap, rather than dropping 50 in a
+// batch. The batch was cheaper per-append but made the transcript lurch: with
+// tool output (a card + its output + a done line is 3 items) fifty items is two
+// or three whole turns vanishing between one message and the next, which reads
+// as the session having reset rather than scrolled. Slicing one element off a
+// ~600-entry array is trivial next to the React render it accompanies.
+const TRIM_STEP = 1;
 
 // Row-budget scroll (see shownItems in render). These are ESTIMATES — Ink doesn't
 // expose measured heights — tuned to be slightly generous so the flex-end clip
@@ -82,11 +89,12 @@ function itemRows(it, cols) {
   }
 }
 
-// Append items with a bounded length. When we exceed MAX_ITEMS we drop the
-// oldest down to TRIM_TO and leave a single marker so it's clear the on-screen
-// history was clipped (the full logs are still on disk). The marker carries a
-// running total of everything dropped so far, so repeated trims read as one
-// growing "N earlier lines trimmed" line rather than stacking up.
+// Append items with a bounded length. Once we exceed MAX_ITEMS we drop the
+// oldest ONE at a time and keep a single marker at the top, so it's clear the
+// on-screen history was clipped (the full logs are still on disk, and the MODEL
+// still has the whole conversation — this cap is purely what's rendered). The
+// marker carries a running total of everything dropped so far, so repeated trims
+// read as one growing "N earlier lines trimmed" line rather than stacking up.
 function appendItems(cur, added) {
   // Separate any existing trim marker from the real items first, so its historical
   // count is never re-counted as freshly-dropped lines (that double-counted).
@@ -95,11 +103,19 @@ function appendItems(cur, added) {
   if (cur[0]?.kind === 'trim') { prior = cur[0].count || 0; base = cur.slice(1); }
 
   const next = added.length ? base.concat(added) : base;
-  if (next.length <= (prior ? MAX_ITEMS - 1 : MAX_ITEMS)) {
-    // still within budget — keep the marker (if any) at the front, untouched
-    return prior ? [cur[0], ...next] : next;
-  }
-  const dropped = next.length - TRIM_TO; // real items removed this trim
+  // Within budget while there's no marker yet: the full MAX_ITEMS is available.
+  if (!prior && next.length <= MAX_ITEMS) return next;
+  // From here on a marker exists (or is about to), and it occupies a row — so
+  // the real budget for CONTENT is one less. Computing the cap from `prior`
+  // (the count BEFORE this append) got the transition wrong: the append that
+  // first created the marker left 601 rows, and the next one then had to drop 2
+  // to catch up. Deriving it from "a marker will exist" instead keeps every
+  // steady-state append at exactly one.
+  const cap = MAX_ITEMS - 1;
+  if (next.length <= cap) return prior ? [cur[0], ...next] : next;
+  // Drop exactly as many as we're over (TRIM_STEP at a time in the steady state,
+  // more only if a single append arrived larger than the overflow).
+  const dropped = Math.max(TRIM_STEP, next.length - cap);
   const kept = next.slice(dropped);
   return [{ _k: uid(), kind: 'trim', count: prior + dropped }, ...kept];
 }
@@ -1095,10 +1111,35 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
 
   // rough token estimate of the session (chars/4) + configurable context size
   // (state, so /context and startup auto-detect re-render the gauge live).
-  const tokens = estimateTokens(engine.history);
+  // Tool schemas are re-serialised per request; their size only changes when the
+  // websearch key appears/disappears, so memoise on that rather than per render.
+  const toolSchemaChars = useMemo(
+    () => { try { return JSON.stringify(toolSchemas(config)).length; } catch { return 0; } },
+    [config.search?.braveApiKey, config.search?.enabled],
+  );
+  const tokens = estimateTokens(engine.history, engine.systemPrompt, toolSchemaChars);
   const ctxPct = Math.min(100, Math.round((tokens / contextSize) * 100));
   // colour the gauge by how full the window is: dim < 60% < amber < 85% < red
   const ctxColor = ctxPct >= 85 ? theme.danger : ctxPct >= 60 ? theme.warn : theme.dim;
+
+  // Say it out loud once at 85%, rather than only tinting a number in the corner.
+  // Running out of context is recoverable if you compact BEFORE the refusal and
+  // unrecoverable in the sense that matters if you wait — so the warning has to
+  // arrive while there's still room to act on it. `warnedCtx` keeps it to one
+  // notice per crossing instead of one per keystroke.
+  const warnedCtx = useRef(false);
+  useEffect(() => {
+    if (ctxPct >= 85 && !warnedCtx.current) {
+      warnedCtx.current = true;
+      push({
+        kind: 'notice',
+        level: 'warn',
+        text: `context ${ctxPct}% full (${fmtTokens(tokens)}/${fmtTokens(contextSize)}) — /compact to summarize and free room`,
+      });
+    } else if (ctxPct < 70 && warnedCtx.current) {
+      warnedCtx.current = false; // re-arm once compacting brought it back down
+    }
+  }, [ctxPct, tokens, contextSize, push]);
 
   // The windowed slice of the transcript to render, computed by usePaneScroll
   // above. `clipBottom` is applied as a negative marginBottom below — that's what
@@ -1564,8 +1605,13 @@ function contentToText(content) {
 // Rough token estimate: ~4 chars/token across all message content. Image parts
 // are counted as a flat ~1.2k tokens each (a coarse stand-in for tiled vision
 // tokens) so the gauge doesn't wildly under-report when images are attached.
-function estimateTokens(history) {
-  let chars = 0;
+function estimateTokens(history, systemPrompt = '', toolSchemaChars = 0) {
+  // The gauge must estimate what is SENT, not just what's in history. Every
+  // request also carries the system prompt and the full tool-schema JSON, so
+  // leaving them out made the gauge systematically under-report — it read 90k
+  // while ~92k was going over the wire. Under-reporting is the dangerous
+  // direction: you find out at the refusal, not before.
+  let chars = String(systemPrompt || '').length + toolSchemaChars;
   let imageTokens = 0;
   for (const m of history || []) {
     if (typeof m.content === 'string') chars += m.content.length;
@@ -1701,9 +1747,15 @@ const TranscriptItem = React.memo(function TranscriptItem({ item, width }) {
     case 'error':
       return <ErrorBox message={item.message} width={width} />;
     case 'trim':
+      // Deliberately NOT faint. This line is the answer to "where did my
+      // conversation go?" — the one moment it's read is when someone thinks the
+      // session reset, and a grey line at the very top is exactly what they
+      // scrolled past. It also states that the MODEL still remembers, because
+      // the visible transcript vanishing and the context being lost are two
+      // completely different things that look identical from the outside.
       return (
-        <Text color={theme.faint} italic>
-          {'  '}↑ {item.count} earlier lines trimmed from view (full output saved on disk)
+        <Text color={theme.warn} wrap="truncate-end">
+          {'  '}↑ {item.count} older lines hidden from view — the model still has them (full output on disk)
         </Text>
       );
     case 'help':

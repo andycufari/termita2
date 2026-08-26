@@ -80,12 +80,15 @@ export class OpenAIProvider {
   // Stream a completion. Calls handlers as data arrives:
   //   onToken(text), onReasoning(text)
   // Returns { text, reasoning, toolCalls: [{id,name,arguments(parsed)}] }
-  async streamComplete({ system, messages, tools, signal, onToken, onReasoning }) {
+  // `maxTokens` overrides the configured reply budget for ONE call. Used by
+  // compact(), whose summary replaces the entire history and so must not be
+  // capped by the (much smaller) budget meant for chat replies.
+  async streamComplete({ system, messages, tools, signal, onToken, onReasoning, maxTokens }) {
     const body = {
       model: this.llm.model,
       messages: [{ role: 'system', content: system }, ...messages],
       stream: true,
-      max_tokens: this.llm.maxTokens ?? 4096,
+      max_tokens: maxTokens ?? this.llm.maxTokens ?? 4096,
       tools,
       tool_choice: 'auto',
     };
@@ -208,18 +211,29 @@ export class OpenAIProvider {
 // theoretical max so the gauge matches what the running model can hold.
 function pickContextLength(m) {
   if (!m || typeof m !== 'object') return null;
-  const candidates = [
-    m.loaded_context_length,
-    m.context_length,
-    m.max_context_length,
-    m.max_model_len,   // vLLM
-    m.n_ctx,           // llama.cpp
-    m.context_window,
+  // llama.cpp / llama-server nests these under `meta`; LM Studio and vLLM put
+  // them at the root. Look in both, root first.
+  const src = [m, m.meta, m.model_info, m.details].filter((o) => o && typeof o === 'object');
+  const FIELDS = [
+    'loaded_context_length',
+    'context_length',
+    'max_context_length',
+    'max_model_len',   // vLLM
+    'n_ctx',           // llama.cpp — the length ACTUALLY loaded
+    'context_window',
   ];
-  for (const c of candidates) {
-    const n = Number(c);
-    if (Number.isFinite(n) && n >= 256) return Math.floor(n);
+  for (const o of src) {
+    for (const f of FIELDS) {
+      const n = Number(o[f]);
+      if (Number.isFinite(n) && n >= 256) return Math.floor(n);
+    }
   }
+  // Deliberately NOT considered: `n_ctx_train`. It's the length the model was
+  // TRAINED at, not what the server loaded — a 27B served at n_ctx=131072 still
+  // reports n_ctx_train=262144. Trusting it told one user they had 262k when the
+  // real ceiling was half that, so the gauge read 34% at the moment the request
+  // was actually about to be refused. If nothing above matched, return null and
+  // keep the configured value rather than guessing high.
   return null;
 }
 

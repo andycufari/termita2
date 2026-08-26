@@ -31,6 +31,7 @@ export class Engine {
     this.log = new SessionLog();
 
     this.history = []; // OpenAI-format messages (no system; that's separate)
+    this._preCompact = null; // history saved before the last compact(), for undo
     this.busy = false;
     this.abort = null; // current AbortController
     this._bangSeq = 0; // ids for user-run `!cmd` (distinct from model tool ids)
@@ -135,32 +136,71 @@ export class Engine {
     ];
   }
 
+  // Tokens the summary itself is allowed. Deliberately NOT llm.maxTokens: that
+  // budget is sized for a chat reply (often 4096), and the summary REPLACES the
+  // entire conversation — capping it there silently truncated hours of work into
+  // a half-finished paragraph, with no copy left to recover from.
+  static SUMMARY_MAX_TOKENS = 8192;
+
   // Ask the model to summarize the conversation so far, then collapse history to
-  // that summary — frees context on a long session without wiping it. Returns
-  // { ok, before, after } token-ish sizes, or { ok:false } if there's nothing to
-  // compact or a turn is running.
+  // that summary — frees context on a long session without wiping it.
+  //
+  // Compaction is the one destructive operation here, so it keeps a copy: the
+  // pre-compact history is stashed on the engine and restorable with
+  // undoCompact() until the next compact. It also refuses to destroy anything if
+  // the summary came back empty or visibly truncated — a bad summary is worse
+  // than a full context, because the full context can still be compacted later
+  // while a lost conversation can't be recovered.
+  //
+  // Returns { ok, before, after, chars } or { ok:false, reason }.
   async compact() {
-    if (this.busy || this.history.length < 2) return { ok: false };
+    if (this.busy) return { ok: false, reason: 'busy' };
+    if (this.history.length < 2) return { ok: false, reason: 'nothing to compact' };
     const before = this.history.length;
     const transcript = this.history
       .map((m) => `${m.role}: ${typeof m.content === 'string' ? m.content : '[content]'}`)
       .join('\n');
-    let summary = '';
+    let resp;
     try {
-      const resp = await this.provider.streamComplete({
+      resp = await this.provider.streamComplete({
         system: 'Summarize this terminal-assistant conversation compactly: the task, key facts learned, commands run and their results, and any open threads. Be terse; this replaces the history.',
         messages: [{ role: 'user', content: transcript }],
+        maxTokens: Engine.SUMMARY_MAX_TOKENS,
         onToken: () => {},
         onReasoning: () => {},
       });
-      summary = (resp.text || '').trim();
-    } catch {
-      return { ok: false };
+    } catch (err) {
+      // The compact request is the LARGEST one of the session (it sends the whole
+      // history at once), so it's the most likely to be refused for context — the
+      // exact moment you needed it to work. Say that plainly instead of a bare
+      // "nothing to compact", which reads as "there was nothing to do".
+      return { ok: false, reason: `summarizing failed: ${err.message}`, history_intact: true };
     }
-    if (!summary) return { ok: false };
+    const summary = (resp?.text || '').trim();
+    if (!summary) return { ok: false, reason: 'the model returned an empty summary — history left untouched' };
+    if (resp.finishReason === 'length') {
+      return {
+        ok: false,
+        reason: 'the summary hit the token limit and would be cut off — history left untouched',
+      };
+    }
+    this._preCompact = this.history;   // the copy that makes this reversible
     this.setSummary(summary);
-    return { ok: true, before, after: this.history.length };
+    this._persist();
+    return { ok: true, before, after: this.history.length, chars: summary.length };
   }
+
+  // Put back the history compact() replaced. One level deep on purpose: this is
+  // an "that summary was bad, give it back" escape hatch, not a history stack.
+  undoCompact() {
+    if (!this._preCompact) return { ok: false };
+    this.history = this._preCompact;
+    this._preCompact = null;
+    this._persist();
+    return { ok: true, restored: this.history.length };
+  }
+
+  get canUndoCompact() { return !!this._preCompact; }
 
   async _awaitDecision(toolCall) {
     // Register the pending promise BEFORE emitting, so a synchronous listener

@@ -57,9 +57,21 @@ export async function runSlash(line, ctx) {
     case 'compact': {
       push({ kind: 'notice', text: 'summarizing conversation…', level: 'dim' });
       const res = await engine.compact();
+      if (res.ok) {
+        push({ kind: 'notice', text: `compacted ${res.before} messages → 1 summary (${res.chars} chars) · /uncompact to undo`, level: 'ok' });
+      } else {
+        // Always say the history survived. The old message ("nothing to compact")
+        // was ambiguous about whether it had eaten the conversation or not.
+        push({ kind: 'notice', text: `${res.reason || 'could not compact'} — nothing was discarded`, level: 'warn' });
+      }
+      return;
+    }
+
+    case 'uncompact': {
+      const res = engine.undoCompact();
       push(res.ok
-        ? { kind: 'notice', text: `compacted ${res.before} messages → 1 summary; context freed`, level: 'ok' }
-        : { kind: 'notice', text: 'nothing to compact (or the model returned no summary)', level: 'warn' });
+        ? { kind: 'notice', text: `restored ${res.restored} messages from before the last compact`, level: 'ok' }
+        : { kind: 'notice', text: 'nothing to restore (undo is available only right after a /compact)', level: 'warn' });
       return;
     }
 

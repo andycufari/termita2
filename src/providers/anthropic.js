@@ -44,10 +44,10 @@ export class AnthropicProvider {
   }
 
   // Same interface as OpenAIProvider.streamComplete.
-  async streamComplete({ system, messages, tools, signal, onToken, onReasoning }) {
+  async streamComplete({ system, messages, tools, signal, onToken, onReasoning, maxTokens }) {
     const body = {
       model: this.llm.model,
-      max_tokens: this.llm.maxTokens ?? 4096,
+      max_tokens: maxTokens ?? this.llm.maxTokens ?? 4096,
       stream: true,
       system,
       messages: toAnthropicMessages(messages),
@@ -55,7 +55,7 @@ export class AnthropicProvider {
     };
     // Extended thinking: Anthropic needs a budget; enable only when asked.
     if (this.llm.reasoning) {
-      body.thinking = { type: 'enabled', budget_tokens: Math.min(2048, (this.llm.maxTokens ?? 4096) - 512) };
+      body.thinking = { type: 'enabled', budget_tokens: Math.min(2048, (maxTokens ?? this.llm.maxTokens ?? 4096) - 512) };
     }
 
     let res;
