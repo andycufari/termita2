@@ -2,6 +2,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import { isIncognito } from './incognito.js';
 
 export function configDir() {
   const xdg = process.env.XDG_CONFIG_HOME;
@@ -59,6 +60,7 @@ export function loadConfig() {
 }
 
 export function saveConfig(config) {
+  if (isIncognito()) return; // incognito: settings apply this session, never saved
   const dir = configDir();
   fs.mkdirSync(dir, { recursive: true });
   // Merge over defaults so a partial config object can never clobber the file

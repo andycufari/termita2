@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { configDir } from './config.js';
+import { isIncognito } from './incognito.js';
 
 function sessionPath() {
   return path.join(configDir(), 'last-session.json');
@@ -16,6 +17,9 @@ function sessionPath() {
 // Save history + a little metadata. Called on exit and after each turn so a hard
 // kill still leaves a recent snapshot. `history` is the engine's message array.
 export function saveSession({ history, model, cwd, savedAt }) {
+  // incognito: never overwrite the snapshot — `termita -c` keeps resuming the
+  // last REAL session, not the throwaway one.
+  if (isIncognito()) return;
   try {
     if (!Array.isArray(history) || history.length === 0) return;
     const data = { version: 1, savedAt: savedAt || null, model: model || null, cwd: cwd || null, history };

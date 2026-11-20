@@ -9,6 +9,7 @@ import {
   setCognito as memSetCognito,
   isCognito as memIsCognito,
 } from './config/memory.js';
+import { isIncognito } from './config/incognito.js';
 
 // Mask a secret for display: keep the first 4 + last 4 chars.
 function maskKey(k) {
@@ -183,8 +184,13 @@ export async function runSlash(line, ctx) {
         if (/^-g\b/.test(text) || /^--global\b/.test(text)) { scope = 'global'; text = text.replace(/^(-g|--global)\s*/, ''); }
         const saved = memAddNote(text, { scope });
         if (!saved) { push({ kind: 'notice', text: 'nothing to save — /memory add <note>', level: 'warn' }); return; }
+        if (saved.cognito) { push({ kind: 'notice', text: 'incognito — not saved to memory', level: 'warn' }); return; }
         push({ kind: 'notice', text: `remembered (${saved.scope}): ${saved.note}`, level: 'ok' });
         ctx.memoryChanged?.();
+        return;
+      }
+      if (isIncognito() && ['forget', 'rm', 'clear', 'wipe'].includes(sub)) {
+        push({ kind: 'notice', text: 'incognito session — memory is read-only, nothing changed', level: 'warn' });
         return;
       }
       if (sub === 'forget' || sub === 'rm') {

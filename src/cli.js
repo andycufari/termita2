@@ -5,11 +5,23 @@ import pkg from '../package.json' with { type: 'json' };
 import { loadConfig, saveConfig, configExists, CONFIG_PATH, SYSTEM_PATH } from './config/config.js';
 import { probeSystem, saveSystem, getSystem } from './config/system.js';
 import { saveSession, loadSession } from './config/session.js';
+import { setIncognito } from './config/incognito.js';
+import { setCognito } from './config/memory.js';
 
 export const VERSION = pkg.version;
 
-const argv = process.argv.slice(2);
+const rawArgv = process.argv.slice(2);
+// --incognito / --ghost: a throwaway session that leaves no trace (no log, no
+// memory, no resume snapshot, no config writes — see config/incognito.js). Set
+// before anything is constructed; stripped so it can sit anywhere on the line.
+const INCOGNITO_FLAGS = ['--incognito', '--ghost'];
+const incognito = rawArgv.some((a) => INCOGNITO_FLAGS.includes(a));
+const argv = rawArgv.filter((a) => !INCOGNITO_FLAGS.includes(a));
 const sub = argv[0];
+if (incognito) {
+  setIncognito(true);
+  setCognito(true); // and start with memory recall off too (/cognito off restores recall)
+}
 
 // minimal ansi for non-Ink subcommands
 const c = {
@@ -77,11 +89,12 @@ function help() {
   🏴‍☠️ ${c.magenta(c.bold('termita'))} 🇦🇷 ${c.dim(`${VERSION} — Local AI first copilot for your console`)}
 
   ${c.bold('usage')}
-    termita            ${c.dim('open the chat TUI')}
-    termita -c         ${c.dim('continue the last session')}
-    termita init       ${c.dim('probe system + write config')}
-    termita doctor     ${c.dim('check endpoint, model, node')}
-    termita --help     ${c.dim('this')}
+    termita              ${c.dim('open the chat TUI')}
+    termita -c           ${c.dim('continue the last session')}
+    termita --incognito  ${c.dim('throwaway session, leaves no trace (alias --ghost)')}
+    termita init         ${c.dim('probe system + write config')}
+    termita doctor       ${c.dim('check endpoint, model, node')}
+    termita --help       ${c.dim('this')}
 `);
 }
 
@@ -127,7 +140,7 @@ async function bootstrapTUI({ resume = false } = {}) {
   // half-fixed in v7). The cost is no NATIVE scrollback, so the transcript is a
   // height-windowed, in-app-scrollable region instead (see app.jsx).
   const { waitUntilExit } = render(
-    React.createElement(App, { engine, config, provider, needsSetup, restored }),
+    React.createElement(App, { engine, config, provider, needsSetup, restored, incognito }),
     { exitOnCtrlC: false, alternateScreen: true },
   );
 

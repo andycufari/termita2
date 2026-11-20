@@ -3,6 +3,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 import { configDir, SYSTEM_PATH } from './config.js';
+import { isIncognito } from './incognito.js';
 
 const COMMON_TOOLS = [
   'git', 'docker', 'docker-compose', 'systemctl', 'node', 'npm', 'pnpm', 'yarn',
@@ -86,6 +87,7 @@ export function probeSystem() {
 }
 
 export function saveSystem(sys) {
+  if (isIncognito()) return; // incognito: probe in memory only
   fs.mkdirSync(configDir(), { recursive: true });
   fs.writeFileSync(SYSTEM_PATH(), JSON.stringify(sys, null, 2) + '\n', 'utf8');
 }

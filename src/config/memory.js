@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { configDir } from './config.js';
+import { isIncognito } from './incognito.js';
 
 const MEMORY_PATH = () => path.join(configDir(), 'memory.json');
 const MAX_NOTES = 100; // sanity backstop per bucket; oldest dropped past this
@@ -39,6 +40,7 @@ export function loadMemory() {
 }
 
 export function saveMemory(mem) {
+  if (isIncognito()) return; // incognito launch: memory.json is read-only
   fs.mkdirSync(configDir(), { recursive: true });
   fs.writeFileSync(MEMORY_PATH(), JSON.stringify(mem, null, 2) + '\n', 'utf8');
 }
@@ -60,7 +62,8 @@ export function activeNotes(cwd = process.cwd()) {
 export function addNote(note, { scope = 'project', cwd = process.cwd() } = {}) {
   const clean = String(note || '').trim();
   if (!clean) return null;
-  if (cognito) return { scope, note: clean, added: false, cognito: true }; // blackout: don't persist
+  // blackout (/cognito) or incognito launch: don't persist
+  if (cognito || isIncognito()) return { scope, note: clean, added: false, cognito: true };
   const mem = loadMemory();
   const bucket = scope === 'global' ? mem.global : (mem.project[cwd] ||= []);
   const exists = bucket.some((n) => n.toLowerCase() === clean.toLowerCase());

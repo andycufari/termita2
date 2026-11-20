@@ -8,8 +8,10 @@
 // path is handed to the model in the clamped result). This keeps memory bounded
 // without losing any output — see loop.js / shell.js / tools/index.js.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { configDir } from '../config/config.js';
+import { isIncognito } from '../config/incognito.js';
 
 function sessionsDir() {
   return path.join(configDir(), 'sessions');
@@ -52,6 +54,17 @@ export class SessionLog {
     this.file = null;
     this.outDir = null;        // sessions/<date>/ — holds per-command .out files
     this._outFiles = [];       // paths written this session, for exit cleanup
+    this._private = false;     // incognito: outDir is a temp dir we own outright
+    if (isIncognito()) {
+      // No journal at all. Full command output still needs a home (the model
+      // reads the middle of long output from it), so it goes to a private temp
+      // dir outside ~/.config that cleanup() removes whole.
+      try {
+        this.outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'termita-incognito-'));
+        this._private = true;
+      } catch { this.outDir = null; }
+      return;
+    }
     try {
       const dir = sessionsDir();
       fs.mkdirSync(dir, { recursive: true });
@@ -117,6 +130,10 @@ export class SessionLog {
       try { fs.rmSync(p, { force: true }); } catch { /* best-effort */ }
     }
     this._outFiles = [];
+    if (this._private) {
+      try { fs.rmSync(this.outDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      return;
+    }
     // drop the now-empty dated folder if nothing else wrote to it
     if (this.outDir) {
       try { fs.rmdirSync(this.outDir); } catch { /* not empty / gone — fine */ }

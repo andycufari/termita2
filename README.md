@@ -118,8 +118,10 @@ Settings are saved to:
 - **System facts:** `~/.config/termita/system.json` (re-probe with `termita init`)
 
 ```sh
-termita doctor    # check provider, endpoint, model, node version
-termita init      # re-probe system facts
+termita doctor       # check provider, endpoint, model, node version
+termita init         # re-probe system facts
+termita -c           # continue the last session
+termita --incognito  # throwaway session that leaves no trace (alias --ghost)
 ```
 
 You can still edit `config.json` by hand if you prefer — here's the shape:
@@ -207,7 +209,7 @@ You chat. When something needs the system, termita proposes a command and waits.
 
 Navigate with **↑ / ↓** and **Enter**, or hit the letter directly.
 
-**Auto-approve mode** (`TAB` or `/auto`): commands run without asking — *except*
+**Auto-approve mode** (`SHIFT+TAB` or `/auto`): commands run without asking — *except*
 dangerous patterns, which always prompt with a red warning. File writes auto-run too.
 
 **Esc** interrupts anything: a streaming reply, a running command, or a prompt.
@@ -286,11 +288,14 @@ directory. An `@mention` that isn't a real file is left in your message untouche
 | `/setup`             | re-run the provider / model setup wizard        |
 | `/model [id]`        | list models / switch the active model           |
 | `/reasoning on\|off` | toggle the thinking trace                        |
-| `/auto`              | toggle auto-approve (same as TAB)               |
+| `/auto`              | toggle auto-approve (same as SHIFT+TAB)         |
 | `/clean`             | wipe transcript + history (fresh context)       |
 | `/compact`           | summarize history into a note, free context     |
+| `/uncompact`         | undo the last /compact, restore full history    |
 | `/context [n]`       | show / set the model context window (gauge)     |
 | `/mouse [on\|off]`   | wheel-scroll vs native drag-select / copy       |
+| `/dual [on\|off]`    | split chat \| shell panes (TAB switches pane)    |
+| `/view [path\|off]`  | read a file in the right pane (no arg = pick)   |
 | `/memory […]`        | show / manage what termita remembers            |
 | `/cognito [on\|off]` | incognito — no memory saved or recalled         |
 | `/allow`             | list allowlist rules                            |
@@ -329,6 +334,28 @@ command for those.
 **Incognito:** `/cognito on` is a session blackout — nothing is saved *and*
 nothing is recalled, so the model runs as if memory were empty. `/cognito off`
 brings it back. Resets to off each launch. The footer shows 🕶️ while it's on.
+
+### Incognito sessions — `termita --incognito`
+
+For test runs you don't want polluting your real history, launch with
+**`termita --incognito`** (alias `--ghost`). The whole session leaves no trace in
+`~/.config/termita`:
+
+| What                          | Normal                           | `--incognito`                              |
+|-------------------------------|----------------------------------|--------------------------------------------|
+| Session log (`sessions/*.log`) | appended                         | not written                                |
+| Full command output (`.out`)  | `sessions/<date>/`, cleaned on exit | private temp dir, removed on exit       |
+| Resume snapshot (`termita -c`) | overwritten every turn           | untouched — `-c` still resumes your last *real* session |
+| Memory (`memory.json`)        | read + written                   | not recalled, never written                |
+| Settings (`/theme`, `/model`, …) | saved to `config.json`         | apply for this session only                |
+
+Your existing config, model and keys are used as-is (read-only). The footer shows
+👻 while it's on. `/cognito off` inside an incognito session turns memory
+**recall** back on (to test with your notes) — still nothing is saved.
+`termita --incognito -c` resumes your last real session as a throwaway branch.
+
+Files the model writes for you and commands it runs are real work, not termita's
+state — incognito doesn't sandbox those.
 
 ### Web search
 

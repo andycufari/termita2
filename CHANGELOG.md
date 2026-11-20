@@ -5,6 +5,42 @@ All notable changes to **termita** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] — 2026-11-20
+
+### Added
+- **`termita --incognito` (alias `--ghost`) — sessions that leave no trace.** For
+  test runs that shouldn't touch your real history. Nothing is written to
+  `~/.config/termita`: no `sessions/*.log` journal, no memory saved (and recall
+  off by default — `/cognito off` brings recall back, still without saving), no
+  `last-session.json` overwrite (so `termita -c` keeps resuming your last *real*
+  session), and settings changed mid-session (`/theme`, `/model`, …) apply but
+  aren't saved. Full command output goes to a private temp dir that's removed on
+  exit. Footer shows 👻. Your existing config and keys are read as usual.
+- **`/dual`** — opt-in Norton-style split (chat | shell); classic single view is
+  the default. TAB switches panes.
+- **`/view [path]`** — read-only file viewer in the right pane (line numbers,
+  Markdown rendering, ←→ panning). With no path, picks from files the model
+  mentioned. The model can open one for you with the `show_user` tool.
+- **`/uncompact`** — undo the last `/compact` and restore the full history.
+
+### Changed
+- **SHIFT+TAB always toggles auto-approve; TAB only switches panes** (it used to
+  change meaning with the window width).
+- Approval prompt is a real modal, and auto-approve mode is shown prominently.
+
+### Fixed
+- **`/memory add` and `/memory forget|clear` lied under `/cognito`** — they
+  reported success without saving/removing. They now say nothing changed.
+- **Context gauge read against the wrong ceiling** (llama.cpp's nested `meta`,
+  `n_ctx_train` mistaken for the loaded context) and ignored the system prompt +
+  tool schemas. It now counts what's actually sent and warns once at 85%.
+- **`/compact` could silently destroy a conversation** (summary truncated at the
+  reply budget). It now has its own budget, refuses to discard on an empty or
+  truncated summary, and is undoable.
+- Transcript trimming is gradual (one item at a time, not 50 at once).
+- ↑ no longer overwrites an unsent draft; panes no longer bleed into each
+  other; Markdown tables fit their pane; shell output is sanitized.
+
 ## [2.10.0] — 2026-07-13
 
 ### Added

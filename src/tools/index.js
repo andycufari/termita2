@@ -3,6 +3,7 @@ import { runShell } from './shell.js';
 import { readFile, writeFile, grepFiles } from './fs.js';
 import { webSearch } from './websearch.js';
 import { addNote, forgetNote, activeNotes } from '../config/memory.js';
+import { isIncognito } from '../config/incognito.js';
 
 // The websearch schema is added CONDITIONALLY (only when a Brave key is set) so
 // the model never sees a tool it can't use. See toolSchemas() below.
@@ -228,6 +229,7 @@ function runMemory(args, ctx = {}) {
     return { output: `${verb} (${saved.scope}): ${saved.note}`, meta: { memoryChanged: saved.added } };
   }
   if (action === 'forget') {
+    if (isIncognito()) return { output: 'incognito session — memory is read-only, nothing forgotten', meta: {} };
     const removed = forgetNote(Number(args.index), cwd);
     if (!removed) return { output: `no note #${args.index} to forget`, meta: {} };
     return { output: `forgot: ${removed.note}`, meta: { memoryChanged: true } };

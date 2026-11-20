@@ -120,7 +120,7 @@ function appendItems(cur, added) {
   return [{ _k: uid(), kind: 'trim', count: prior + dropped }, ...kept];
 }
 
-export default function App({ engine, config, provider, needsSetup, restored }) {
+export default function App({ engine, config, provider, needsSetup, restored, incognito = false }) {
   const { exit, suspendTerminal } = useApp();
   const { stdout } = useStdout();
 
@@ -129,8 +129,9 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
   // transcript from it (user/assistant messages only — tool calls and their
   // output aren't replayed, the summary of what happened is in the messages).
   const [items, setItems] = useState(() => {
-    if (!restored || !engine.history?.length) return [];
     const out = [];
+    if (incognito) out.push({ _k: uid(), kind: 'notice', text: '👻 incognito — no log, no memory, no resume snapshot, settings not saved. Nothing of this session is kept.', level: 'warn' });
+    if (!restored || !engine.history?.length) return out;
     for (const m of engine.history) {
       if (m.role === 'user' && typeof m.content === 'string' && m.content.trim()) {
         out.push({ _k: uid(), kind: 'msg', who: 'you', text: m.content });
@@ -138,7 +139,8 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
         out.push({ _k: uid(), kind: 'msg', who: 'term', text: m.content });
       }
     }
-    if (out.length) out.push({ _k: uid(), kind: 'notice', text: `↩ resumed last session (${out.length} messages)`, level: 'dim' });
+    const resumed = out.length - (incognito ? 1 : 0);
+    if (resumed) out.push({ _k: uid(), kind: 'notice', text: `↩ resumed last session (${resumed} messages)`, level: 'dim' });
     return out;
   });
   const [input, setInput] = useState('');
@@ -171,7 +173,7 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
   const [model, setModel] = useState(config.llm.model);
   const [contextSize, setContextSize] = useState(config.llm.contextSize || 8192);
   const [mouseCapture, setMouseCapture] = useState(config.ui?.mouseCapture !== false); // wheel-scroll vs native select
-  const [cognito, setCognito] = useState(false); // incognito: memory blackout (session-only)
+  const [cognito, setCognito] = useState(!!incognito); // memory blackout (session-only; on from launch with --incognito)
   const [status, setStatus] = useState(null);
   const [pendingShare, setPendingShare] = useState(null); // staged `!cmd` context awaiting a comment
   const [shareMenu, setShareMenu] = useState(null); // { cmd, output, outFile, exitCode, sel } after a pipe `!cmd`
@@ -748,11 +750,13 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
       engine.rebuildSystemPrompt();
       push({ kind: 'notice', text: next
         ? '🕶️  incognito ON — nothing saved or recalled from memory this session'
-        : 'incognito OFF — memory active again',
+        : incognito
+          ? 'memory recall ON — still incognito: nothing is saved, logged or kept'
+          : 'incognito OFF — memory active again',
         level: next ? 'warn' : 'ok' });
       return next;
     });
-  }, [engine, push]);
+  }, [engine, push, incognito]);
 
   // On startup, ask the server what context length the model actually has loaded
   // and adopt it — so the gauge isn't stuck at the 8k default when LM Studio is
@@ -1478,7 +1482,9 @@ export default function App({ engine, config, provider, needsSetup, restored }) 
           <Box paddingLeft={1} justifyContent="space-between" flexWrap="wrap">
             <MascotTag version={VERSION} />
             <Text>
-              {cognito && <Text color={theme.warn} bold>🕶️ incognito </Text>}
+              {incognito
+                ? <Text color={theme.warn} bold>👻 incognito </Text>
+                : cognito && <Text color={theme.warn} bold>🕶️ incognito </Text>}
               {autoApprove && <Text color={theme.warn} bold>AUTO-ACCEPT {glyphs.bolt} </Text>}
               {reasoning && <Text color={theme.faint}>{glyphs.thought} think </Text>}
               <Text color={ctxColor}>ctx {fmtTokens(tokens)}/{fmtTokens(contextSize)} {ctxPct}% </Text>
